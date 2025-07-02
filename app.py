@@ -282,6 +282,18 @@ def create_product_selection():
             "margin": "sm"
         })
     
+    # カスタム商品入力ボタンを追加
+    buttons.append({
+        "type": "button",
+        "action": {
+            "type": "postback",
+            "label": "カスタム商品を入力",
+            "data": "action=custom_product"
+        },
+        "style": "primary",
+        "margin": "sm"
+    })
+    
     return {
         "type": "bubble",
         "body": {
@@ -322,6 +334,18 @@ def create_size_selection(product):
             "margin": "sm"
         })
     
+    # カスタム価格入力ボタンを追加
+    buttons.append({
+        "type": "button",
+        "action": {
+            "type": "postback",
+            "label": "カスタム価格を入力",
+            "data": f"action=custom_price&product={product}"
+        },
+        "style": "primary",
+        "margin": "sm"
+    })
+    
     return {
         "type": "bubble",
         "body": {
@@ -350,7 +374,7 @@ def create_quantity_selection(product, size, price):
     quantities = [1, 2, 3, 5, 10, 20, 50, 100]
     
     for qty in quantities:
-        total = price * qty
+        total = int(price) * qty
         buttons.append({
             "type": "button",
             "action": {
@@ -505,6 +529,20 @@ def handle_postback(event):
         )
         send_flex_message(event.reply_token, flex_message)
         
+    elif action == 'custom_product':
+        # カスタム商品名入力の案内
+        reply = "カスタム商品を追加するには、以下の形式で入力してください：\n\n"
+        reply += "商品名:○○○○\n"
+        reply += "サイズ:○○\n"
+        reply += "単価:○○○○\n"
+        reply += "数量:○○\n\n"
+        reply += "例：\n"
+        reply += "商品名:オリジナルTシャツ\n"
+        reply += "サイズ:L\n"
+        reply += "単価:2000\n"
+        reply += "数量:5"
+        send_text_message(event.reply_token, reply)
+        
     elif action == 'select_product':
         # サイズ選択画面を表示
         product = params.get('product', '')
@@ -514,11 +552,30 @@ def handle_postback(event):
         )
         send_flex_message(event.reply_token, flex_message)
         
+    elif action == 'custom_price':
+        # カスタム価格入力の案内
+        product = params.get('product', '')
+        reply = f"{product}のカスタム価格を設定するには、以下の形式で入力してください：\n\n"
+        reply += f"商品名:{product}\n"
+        reply += "サイズ:○○\n"
+        reply += "単価:○○○○\n"
+        reply += "数量:○○\n\n"
+        reply += f"例：\n"
+        reply += f"商品名:{product}\n"
+        reply += "サイズ:L\n"
+        reply += "単価:1800\n"
+        reply += "数量:3"
+        send_text_message(event.reply_token, reply)
+        
     elif action == 'select_size':
         # 数量選択画面を表示
         product = params.get('product', '')
         size = params.get('size', '')
         price = params.get('price', '')
+        
+        # デバッグ用ログ
+        print(f"Creating quantity selection for: product={product}, size={size}, price={price}")
+        
         flex_message = FlexMessage(
             alt_text="数量選択",
             contents=FlexContainer.from_dict(create_quantity_selection(product, size, price))
@@ -531,6 +588,9 @@ def handle_postback(event):
         size = params.get('size', '')
         price = params.get('price', '')
         quantity = params.get('quantity', '')
+        
+        # デバッグ用ログ
+        print(f"Processing quantity selection: product={product}, size={size}, price={price}, quantity={quantity}")
         
         data = {
             '商品名': product,
@@ -548,7 +608,8 @@ def handle_postback(event):
             reply += f"サイズ: {size}\n"
             reply += f"単価: {price}円\n"
             reply += f"数量: {quantity}個\n"
-            reply += f"合計: {data['料金']}円"
+            reply += f"合計: {data['料金']}円\n\n"
+            reply += "続けて商品を追加する場合は「メニュー」と入力してください。"
         else:
             reply = f"❌ エラー: {message}"
         
