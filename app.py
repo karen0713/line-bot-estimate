@@ -29,7 +29,12 @@ configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
 # ユーザー管理システムの初期化
-user_manager = UserManager()
+try:
+    user_manager = UserManager()
+    print("User management system initialized successfully")
+except Exception as e:
+    print(f"User management system initialization error: {e}")
+    user_manager = None
 
 # ユーザーセッション管理（簡易版）
 user_sessions = {}
@@ -448,14 +453,17 @@ def handle_message(event):
     print(f"Received message from {user_id}: {user_text}")
     
     # ユーザー登録（初回利用時）
-    user_info = user_manager.get_user_info(user_id)
-    if not user_info:
-        # 新規ユーザー登録
-        success, message = user_manager.register_user(user_id, "LINE User")
-        if success:
-            print(f"New user registered: {user_id}")
-        else:
-            print(f"User registration failed: {message}")
+    if user_manager:
+        user_info = user_manager.get_user_info(user_id)
+        if not user_info:
+            # 新規ユーザー登録
+            success, message = user_manager.register_user(user_id, "LINE User")
+            if success:
+                print(f"New user registered: {user_id}")
+            else:
+                print(f"User registration failed: {message}")
+    else:
+        print("User management system not available")
     
     # 特殊コマンドの処理
     if user_text.lower() in ['メニュー', 'menu', '開始', 'start']:
@@ -490,20 +498,24 @@ def handle_message(event):
                 
         elif is_product_data:
             # 利用制限チェック
-            can_use, limit_message = user_manager.check_usage_limit(user_id)
-            if not can_use:
-                reply = f"❌ {limit_message}\n\n"
-                reply += "プランアップグレードをご検討ください。\n"
-                reply += "「メニュー」→「利用状況確認」で詳細を確認できます。"
-                send_text_message(event.reply_token, reply)
-                return
+            if user_manager:
+                can_use, limit_message = user_manager.check_usage_limit(user_id)
+                if not can_use:
+                    reply = f"❌ {limit_message}\n\n"
+                    reply += "プランアップグレードをご検討ください。\n"
+                    reply += "「メニュー」→「利用状況確認」で詳細を確認できます。"
+                    send_text_message(event.reply_token, reply)
+                    return
+            else:
+                print("User management system not available, skipping usage limit check")
             
             # 商品データの書き込み
             success, message = write_to_spreadsheet(data)
             
             if success:
                 # 利用回数を記録
-                user_manager.increment_usage(user_id, "add_product", data)
+                if user_manager:
+                    user_manager.increment_usage(user_id, "add_product", data)
                 
                 reply = f"✅ 見積書データを登録しました！\n\n"
                 reply += f"社名: {data.get('社名', 'N/A')}\n"
@@ -607,13 +619,16 @@ def handle_postback(event):
         print(f"Processing quantity selection: product={product}, size={size}, price={price}, quantity={quantity}")
         
         # 利用制限チェック
-        can_use, limit_message = user_manager.check_usage_limit(user_id)
-        if not can_use:
-            reply = f"❌ {limit_message}\n\n"
-            reply += "プランアップグレードをご検討ください。\n"
-            reply += "「メニュー」→「利用状況確認」で詳細を確認できます。"
-            send_text_message(event.reply_token, reply)
-            return
+        if user_manager:
+            can_use, limit_message = user_manager.check_usage_limit(user_id)
+            if not can_use:
+                reply = f"❌ {limit_message}\n\n"
+                reply += "プランアップグレードをご検討ください。\n"
+                reply += "「メニュー」→「利用状況確認」で詳細を確認できます。"
+                send_text_message(event.reply_token, reply)
+                return
+        else:
+            print("User management system not available, skipping usage limit check")
         
         data = {
             '商品名': product,
@@ -627,7 +642,8 @@ def handle_postback(event):
         
         if success:
             # 利用回数を記録
-            user_manager.increment_usage(user_id, "add_product", data)
+            if user_manager:
+                user_manager.increment_usage(user_id, "add_product", data)
             
             reply = f"✅ 商品を追加しました！\n\n"
             reply += f"商品名: {product}\n"
@@ -643,8 +659,11 @@ def handle_postback(event):
         
     elif action == 'check_usage':
         # 利用状況確認
-        summary = user_manager.get_usage_summary(user_id)
-        send_text_message(event.reply_token, summary)
+        if user_manager:
+            summary = user_manager.get_usage_summary(user_id)
+            send_text_message(event.reply_token, summary)
+        else:
+            print("User management system not available, skipping usage summary")
         
     elif action == 'update_company':
         # 会社情報更新の案内

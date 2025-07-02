@@ -4,42 +4,55 @@ from datetime import datetime, timedelta
 import json
 
 class UserManager:
-    def __init__(self, db_path='users.db'):
-        self.db_path = db_path
+    def __init__(self, db_path=None):
+        if db_path is None:
+            # Render環境では/tmpディレクトリを使用
+            if os.environ.get('RENDER'):
+                self.db_path = '/tmp/users.db'
+            else:
+                self.db_path = 'users.db'
+        else:
+            self.db_path = db_path
         self.init_database()
     
     def init_database(self):
         """データベースの初期化"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # ユーザーテーブルの作成
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                user_id TEXT PRIMARY KEY,
-                display_name TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                plan_type TEXT DEFAULT 'free',
-                monthly_usage INTEGER DEFAULT 0,
-                last_reset_date DATE DEFAULT CURRENT_DATE,
-                is_active BOOLEAN DEFAULT 1
-            )
-        ''')
-        
-        # 利用履歴テーブルの作成
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS usage_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT,
-                action_type TEXT,
-                action_data TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users (user_id)
-            )
-        ''')
-        
-        conn.commit()
-        conn.close()
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # ユーザーテーブルの作成
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id TEXT PRIMARY KEY,
+                    display_name TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    plan_type TEXT DEFAULT 'free',
+                    monthly_usage INTEGER DEFAULT 0,
+                    last_reset_date DATE DEFAULT CURRENT_DATE,
+                    is_active BOOLEAN DEFAULT 1
+                )
+            ''')
+            
+            # 利用履歴テーブルの作成
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS usage_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT,
+                    action_type TEXT,
+                    action_data TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users (user_id)
+                )
+            ''')
+            
+            conn.commit()
+            conn.close()
+            print(f"Database initialized successfully at {self.db_path}")
+        except Exception as e:
+            print(f"Database initialization error: {e}")
+            # エラーが発生してもアプリケーションは継続
+            pass
     
     def register_user(self, user_id, display_name):
         """新規ユーザー登録"""
