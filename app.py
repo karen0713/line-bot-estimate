@@ -1,4 +1,4 @@
-from flask import Flask, request, abort
+from flask import Flask, request, abort, redirect, url_for
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage, FlexMessage, FlexContainer
@@ -10,6 +10,7 @@ import re
 import os
 import json
 from user_management import UserManager
+from linepay_payment import LinePayPayment
 
 app = Flask(__name__)
 
@@ -35,6 +36,14 @@ try:
 except Exception as e:
     print(f"User management system initialization error: {e}")
     user_manager = None
+
+# LINE Pay決済システムの初期化
+try:
+    linepay = LinePayPayment()
+    print("LINE Pay system initialized successfully")
+except Exception as e:
+    print(f"LINE Pay system initialization error: {e}")
+    linepay = None
 
 # ユーザーセッション管理（簡易版）
 user_sessions = {}
@@ -276,6 +285,16 @@ def create_main_menu():
                     "type": "button",
                     "action": {
                         "type": "postback",
+                        "label": "プランアップグレード",
+                        "data": "action=upgrade_plan"
+                    },
+                    "style": "primary",
+                    "margin": "sm"
+                },
+                {
+                    "type": "button",
+                    "action": {
+                        "type": "postback",
                         "label": "見積書を確認",
                         "data": "action=view_estimate"
                     },
@@ -424,6 +443,58 @@ def create_quantity_selection(product, size, price):
             "type": "box",
             "layout": "vertical",
             "contents": buttons
+        }
+    }
+
+def create_plan_selection():
+    """プラン選択のFlex Messageを作成"""
+    return {
+        "type": "bubble",
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "プランアップグレード",
+                    "weight": "bold",
+                    "size": "lg",
+                    "align": "center"
+                },
+                {
+                    "type": "text",
+                    "text": "プランを選択してください",
+                    "margin": "md",
+                    "align": "center",
+                    "color": "#666666"
+                }
+            ]
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "button",
+                    "action": {
+                        "type": "postback",
+                        "label": "ベーシックプラン (月額500円)",
+                        "data": "action=select_plan&plan=basic"
+                    },
+                    "style": "primary",
+                    "margin": "sm"
+                },
+                {
+                    "type": "button",
+                    "action": {
+                        "type": "postback",
+                        "label": "プロプラン (月額1,000円)",
+                        "data": "action=select_plan&plan=pro"
+                    },
+                    "style": "primary",
+                    "margin": "sm"
+                }
+            ]
         }
     }
 
@@ -681,6 +752,48 @@ def handle_postback(event):
         reply += "https://docs.google.com/spreadsheets/d/1GkJ8OYwIIMnYqxcwVBNArvk2byFL3UlGHgkyTiV6QU0"
         send_text_message(event.reply_token, reply)
 
+    elif action == 'upgrade_plan':
+        # プラン選択画面を表示
+        if linepay:
+            flex_message = FlexMessage(
+                alt_text="プラン選択",
+                contents=FlexContainer.from_dict(create_plan_selection())
+            )
+            send_flex_message(event.reply_token, flex_message)
+        else:
+            reply = "申し訳ございません。決済システムが利用できません。"
+            send_text_message(event.reply_token, reply)
+    
+    elif action == 'select_plan':
+        # プラン選択時の処理
+        plan_type = params.get('plan', '')
+        if linepay and user_manager:
+            # 決済URLを作成
+            success, result = linepay.create_payment_url(plan_type, user_id)
+            if success:
+                payment_url = result['payment_url']
+                plan_info = result['plan_info']
+                
+                reply = f"💳 {plan_info['name']}の決済\n\n"
+                reply += f"料金: {plan_info['price']}円\n"
+                reply += f"内容: {plan_info['description']}\n\n"
+                reply += "以下のURLから決済を完了してください：\n"
+                reply += f"{payment_url}\n\n"
+                reply += "決済完了後、プランが自動的に更新されます。"
+                
+                # 決済情報をセッションに保存
+                user_sessions[user_id] = {
+                    'plan_type': plan_type,
+                    'transaction_id': result['transaction_id'],
+                    'order_id': result['order_id']
+                }
+            else:
+                reply = f"決済URLの作成に失敗しました: {result}"
+        else:
+            reply = "申し訳ございません。決済システムが利用できません。"
+        
+        send_text_message(event.reply_token, reply)
+
 def send_text_message(reply_token, text):
     """テキストメッセージを送信"""
     try:
@@ -710,6 +823,27 @@ def send_flex_message(reply_token, flex_message):
         print(f"Flex message sent")
     except Exception as e:
         print(f"Error sending flex message: {e}")
+
+@app.route("/payment/confirm", methods=['GET'])
+def payment_confirm():
+    """決済完了時の処理"""
+    transaction_id = request.args.get('transactionId')
+    order_id = request.args.get('orderId')
+    
+    if transaction_id and linepay:
+        # 決済を確定
+        success, result = linepay.confirm_payment(transaction_id, 500)  # 仮の金額
+        if success:
+            return "決済が完了しました！プランが更新されました。LINE Botに戻ってご確認ください。"
+        else:
+            return f"決済の確定に失敗しました: {result}"
+    
+    return "決済情報が見つかりません。"
+
+@app.route("/payment/cancel", methods=['GET'])
+def payment_cancel():
+    """決済キャンセル時の処理"""
+    return "決済がキャンセルされました。LINE Botに戻ってお試しください。"
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5002))
