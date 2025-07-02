@@ -1,13 +1,14 @@
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage
-from linebot.v3.webhooks import MessageEvent, TextMessageContent
+from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage, FlexMessage, FlexContainer
+from linebot.v3.webhooks import MessageEvent, TextMessageContent, PostbackEvent
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 import re
 import os
+import json
 
 app = Flask(__name__)
 
@@ -26,13 +27,25 @@ SHEET_NAME = os.environ.get('SHEET_NAME', '比較見積書 ロング')
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
+# ユーザーセッション管理（簡易版）
+user_sessions = {}
+
+# 商品テンプレート
+PRODUCT_TEMPLATES = {
+    "Tシャツ": {"sizes": ["S", "M", "L", "XL"], "prices": [1500, 1500, 1500, 1500]},
+    "ポロシャツ": {"sizes": ["S", "M", "L", "XL"], "prices": [2500, 2500, 2500, 2500]},
+    "作業服": {"sizes": ["S", "M", "L", "XL"], "prices": [3000, 3000, 3000, 3000]},
+    "帽子": {"sizes": ["FREE", "L"], "prices": [800, 800]},
+    "タオル": {"sizes": ["FREE"], "prices": [500]},
+    "その他": {"sizes": ["FREE"], "prices": [1000]}
+}
+
 def setup_google_sheets():
     """Google Sheets APIの設定"""
     try:
         # 環境変数からサービスアカウント情報を取得
         service_account_info = os.environ.get('GOOGLE_SHEETS_CREDENTIALS')
         if service_account_info:
-            import json
             creds = Credentials.from_service_account_info(
                 json.loads(service_account_info), scopes=SCOPES)
         else:
@@ -192,6 +205,192 @@ def update_company_info(data):
         print(f"Company info update error: {e}")
         return False, f"更新エラー: {str(e)}"
 
+def create_main_menu():
+    """メインメニューのFlex Messageを作成"""
+    return {
+        "type": "bubble",
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "見積書作成システム",
+                    "weight": "bold",
+                    "size": "lg",
+                    "align": "center"
+                },
+                {
+                    "type": "text",
+                    "text": "何をしますか？",
+                    "margin": "md",
+                    "align": "center",
+                    "color": "#666666"
+                }
+            ]
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "button",
+                    "action": {
+                        "type": "postback",
+                        "label": "商品を追加",
+                        "data": "action=add_product"
+                    },
+                    "style": "primary",
+                    "margin": "sm"
+                },
+                {
+                    "type": "button",
+                    "action": {
+                        "type": "postback",
+                        "label": "会社情報を更新",
+                        "data": "action=update_company"
+                    },
+                    "style": "secondary",
+                    "margin": "sm"
+                },
+                {
+                    "type": "button",
+                    "action": {
+                        "type": "postback",
+                        "label": "見積書を確認",
+                        "data": "action=view_estimate"
+                    },
+                    "style": "secondary",
+                    "margin": "sm"
+                }
+            ]
+        }
+    }
+
+def create_product_selection():
+    """商品選択のFlex Messageを作成"""
+    buttons = []
+    for product in PRODUCT_TEMPLATES.keys():
+        buttons.append({
+            "type": "button",
+            "action": {
+                "type": "postback",
+                "label": product,
+                "data": f"action=select_product&product={product}"
+            },
+            "style": "secondary",
+            "margin": "sm"
+        })
+    
+    return {
+        "type": "bubble",
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "商品を選択してください",
+                    "weight": "bold",
+                    "size": "lg",
+                    "align": "center"
+                }
+            ]
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": buttons
+        }
+    }
+
+def create_size_selection(product):
+    """サイズ選択のFlex Messageを作成"""
+    sizes = PRODUCT_TEMPLATES[product]["sizes"]
+    buttons = []
+    
+    for i, size in enumerate(sizes):
+        price = PRODUCT_TEMPLATES[product]["prices"][i]
+        buttons.append({
+            "type": "button",
+            "action": {
+                "type": "postback",
+                "label": f"{size} ({price}円)",
+                "data": f"action=select_size&product={product}&size={size}&price={price}"
+            },
+            "style": "secondary",
+            "margin": "sm"
+        })
+    
+    return {
+        "type": "bubble",
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": f"{product}のサイズを選択",
+                    "weight": "bold",
+                    "size": "lg",
+                    "align": "center"
+                }
+            ]
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": buttons
+        }
+    }
+
+def create_quantity_selection(product, size, price):
+    """数量選択のFlex Messageを作成"""
+    buttons = []
+    quantities = [1, 2, 3, 5, 10, 20, 50, 100]
+    
+    for qty in quantities:
+        total = price * qty
+        buttons.append({
+            "type": "button",
+            "action": {
+                "type": "postback",
+                "label": f"{qty}個 ({total}円)",
+                "data": f"action=select_quantity&product={product}&size={size}&price={price}&quantity={qty}"
+            },
+            "style": "secondary",
+            "margin": "sm"
+        })
+    
+    return {
+        "type": "bubble",
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": f"{product} {size} ({price}円)",
+                    "weight": "bold",
+                    "size": "lg",
+                    "align": "center"
+                },
+                {
+                    "type": "text",
+                    "text": "数量を選択してください",
+                    "margin": "md",
+                    "align": "center",
+                    "color": "#666666"
+                }
+            ]
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": buttons
+        }
+    }
+
 @app.route("/", methods=['GET'])
 def index():
     return "LINE Bot Server is running!"
@@ -214,7 +413,18 @@ def callback():
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     user_text = event.message.text
-    print(f"Received message: {user_text}")  # ログ追加
+    user_id = event.source.user_id
+    print(f"Received message from {user_id}: {user_text}")
+    
+    # 特殊コマンドの処理
+    if user_text.lower() in ['メニュー', 'menu', '開始', 'start']:
+        # メインメニューを表示
+        flex_message = FlexMessage(
+            alt_text="見積書作成システム",
+            contents=FlexContainer.from_dict(create_main_menu())
+        )
+        send_flex_message(event.reply_token, flex_message)
+        return
     
     # 見積書データを解析
     data = parse_estimate_data(user_text)
@@ -256,26 +466,139 @@ def handle_message(event):
             reply += "【会社情報更新】\n"
             reply += "例: 会社名:ABC株式会社 日付:2024/01/15\n\n"
             reply += "【商品データ登録】\n"
-            reply += "例: 社名:ABC株式会社 商品名:商品A サイズ:M 単価:1000 数量:5"
+            reply += "例: 社名:ABC株式会社 商品名:商品A サイズ:M 単価:1000 数量:5\n\n"
+            reply += "または「メニュー」と入力してボタン選択式で入力してください。"
     else:
-        reply = "データの形式が正しくありません。\n\n"
+        reply = "見積書作成システムへようこそ！\n\n"
+        reply += "以下の方法で入力できます：\n\n"
+        reply += "1️⃣ **ボタン選択式（推奨）**\n"
+        reply += "「メニュー」と入力してボタンで選択\n\n"
+        reply += "2️⃣ **テキスト入力**\n"
         reply += "【会社情報更新】\n"
         reply += "例: 会社名:ABC株式会社 日付:2024/01/15\n\n"
         reply += "【商品データ登録】\n"
         reply += "例: 社名:ABC株式会社 商品名:商品A サイズ:M 単価:1000 数量:5"
     
+    send_text_message(event.reply_token, reply)
+
+@handler.add(PostbackEvent)
+def handle_postback(event):
+    """Postbackイベントの処理（ボタンクリック）"""
+    user_id = event.source.user_id
+    data = event.postback.data
+    print(f"Received postback from {user_id}: {data}")
+    
+    # データをパース
+    params = {}
+    for item in data.split('&'):
+        if '=' in item:
+            key, value = item.split('=', 1)
+            params[key] = value
+    
+    action = params.get('action', '')
+    
+    if action == 'add_product':
+        # 商品選択画面を表示
+        flex_message = FlexMessage(
+            alt_text="商品選択",
+            contents=FlexContainer.from_dict(create_product_selection())
+        )
+        send_flex_message(event.reply_token, flex_message)
+        
+    elif action == 'select_product':
+        # サイズ選択画面を表示
+        product = params.get('product', '')
+        flex_message = FlexMessage(
+            alt_text="サイズ選択",
+            contents=FlexContainer.from_dict(create_size_selection(product))
+        )
+        send_flex_message(event.reply_token, flex_message)
+        
+    elif action == 'select_size':
+        # 数量選択画面を表示
+        product = params.get('product', '')
+        size = params.get('size', '')
+        price = params.get('price', '')
+        flex_message = FlexMessage(
+            alt_text="数量選択",
+            contents=FlexContainer.from_dict(create_quantity_selection(product, size, price))
+        )
+        send_flex_message(event.reply_token, flex_message)
+        
+    elif action == 'select_quantity':
+        # 商品データをスプレッドシートに書き込み
+        product = params.get('product', '')
+        size = params.get('size', '')
+        price = params.get('price', '')
+        quantity = params.get('quantity', '')
+        
+        data = {
+            '商品名': product,
+            'サイズ': size,
+            '単価': price,
+            '数量': quantity,
+            '料金': int(price) * int(quantity)
+        }
+        
+        success, message = write_to_spreadsheet(data)
+        
+        if success:
+            reply = f"✅ 商品を追加しました！\n\n"
+            reply += f"商品名: {product}\n"
+            reply += f"サイズ: {size}\n"
+            reply += f"単価: {price}円\n"
+            reply += f"数量: {quantity}個\n"
+            reply += f"合計: {data['料金']}円"
+        else:
+            reply = f"❌ エラー: {message}"
+        
+        send_text_message(event.reply_token, reply)
+        
+    elif action == 'update_company':
+        # 会社情報更新の案内
+        reply = "会社情報を更新するには、以下の形式で入力してください：\n\n"
+        reply += "会社名:○○株式会社\n"
+        reply += "日付:2024/01/15\n\n"
+        reply += "または、\n"
+        reply += "会社名:○○株式会社 日付:2024/01/15"
+        send_text_message(event.reply_token, reply)
+        
+    elif action == 'view_estimate':
+        # 見積書確認の案内
+        reply = "現在の見積書を確認するには、Googleスプレッドシートを直接確認してください。\n\n"
+        reply += "スプレッドシートURL:\n"
+        reply += "https://docs.google.com/spreadsheets/d/1GkJ8OYwIIMnYqxcwVBNArvk2byFL3UlGHgkyTiV6QU0"
+        send_text_message(event.reply_token, reply)
+
+def send_text_message(reply_token, text):
+    """テキストメッセージを送信"""
     try:
         with ApiClient(configuration) as api_client:
             line_bot_api = MessagingApi(api_client)
             line_bot_api.reply_message_with_http_info(
                 ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=[TextMessage(text=reply)]
+                    reply_token=reply_token,
+                    messages=[TextMessage(text=text)]
                 )
             )
-        print(f"Reply sent: {reply}")  # ログ追加
+        print(f"Text message sent: {text}")
     except Exception as e:
-        print(f"Error sending reply: {e}")  # ログ追加
+        print(f"Error sending text message: {e}")
+
+def send_flex_message(reply_token, flex_message):
+    """Flexメッセージを送信"""
+    try:
+        with ApiClient(configuration) as api_client:
+            line_bot_api = MessagingApi(api_client)
+            line_bot_api.reply_message_with_http_info(
+                ReplyMessageRequest(
+                    reply_token=reply_token,
+                    messages=[flex_message]
+                )
+            )
+        print(f"Flex message sent")
+    except Exception as e:
+        print(f"Error sending flex message: {e}")
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5002))
