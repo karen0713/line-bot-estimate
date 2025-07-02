@@ -196,7 +196,7 @@ def update_company_info(data):
 def index():
     return "LINE Bot Server is running!"
 
-@app.route("/callback", methods=['POST'])
+@app.route("/webhook", methods=['POST'])
 def callback():
     signature = request.headers['X-Line-Signature']
     body = request.get_data(as_text=True)
