@@ -9,6 +9,7 @@ from datetime import datetime
 import re
 import os
 import json
+from user_management import UserManager
 
 app = Flask(__name__)
 
@@ -26,6 +27,9 @@ SHEET_NAME = os.environ.get('SHEET_NAME', '比較見積書 ロング')
 
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
+
+# ユーザー管理システムの初期化
+user_manager = UserManager()
 
 # ユーザーセッション管理（簡易版）
 user_sessions = {}
@@ -257,6 +261,16 @@ def create_main_menu():
                     "type": "button",
                     "action": {
                         "type": "postback",
+                        "label": "利用状況確認",
+                        "data": "action=check_usage"
+                    },
+                    "style": "secondary",
+                    "margin": "sm"
+                },
+                {
+                    "type": "button",
+                    "action": {
+                        "type": "postback",
                         "label": "見積書を確認",
                         "data": "action=view_estimate"
                     },
@@ -433,6 +447,16 @@ def handle_message(event):
     user_id = event.source.user_id
     print(f"Received message from {user_id}: {user_text}")
     
+    # ユーザー登録（初回利用時）
+    user_info = user_manager.get_user_info(user_id)
+    if not user_info:
+        # 新規ユーザー登録
+        success, message = user_manager.register_user(user_id, "LINE User")
+        if success:
+            print(f"New user registered: {user_id}")
+        else:
+            print(f"User registration failed: {message}")
+    
     # 特殊コマンドの処理
     if user_text.lower() in ['メニュー', 'menu', '開始', 'start']:
         # メインメニューを表示
@@ -465,11 +489,23 @@ def handle_message(event):
                 reply = f"エラー: {message}"
                 
         elif is_product_data:
+            # 利用制限チェック
+            can_use, limit_message = user_manager.check_usage_limit(user_id)
+            if not can_use:
+                reply = f"❌ {limit_message}\n\n"
+                reply += "プランアップグレードをご検討ください。\n"
+                reply += "「メニュー」→「利用状況確認」で詳細を確認できます。"
+                send_text_message(event.reply_token, reply)
+                return
+            
             # 商品データの書き込み
             success, message = write_to_spreadsheet(data)
             
             if success:
-                reply = f"見積書データを登録しました！\n\n"
+                # 利用回数を記録
+                user_manager.increment_usage(user_id, "add_product", data)
+                
+                reply = f"✅ 見積書データを登録しました！\n\n"
                 reply += f"社名: {data.get('社名', 'N/A')}\n"
                 reply += f"商品名: {data.get('商品名', 'N/A')}\n"
                 reply += f"サイズ: {data.get('サイズ', 'N/A')}\n"
@@ -560,21 +596,6 @@ def handle_postback(event):
         reply += "数量:3"
         send_text_message(event.reply_token, reply)
         
-    elif action == 'select_size':
-        # 数量選択画面を表示
-        product = params.get('product', '')
-        size = params.get('size', '')
-        price = params.get('price', '')
-        
-        # デバッグ用ログ
-        print(f"Creating quantity selection for: product={product}, size={size}, price={price}")
-        
-        flex_message = FlexMessage(
-            alt_text="数量選択",
-            contents=FlexContainer.from_dict(create_quantity_selection(product, size, price))
-        )
-        send_flex_message(event.reply_token, flex_message)
-        
     elif action == 'select_quantity':
         # 商品データをスプレッドシートに書き込み
         product = params.get('product', '')
@@ -584,6 +605,15 @@ def handle_postback(event):
         
         # デバッグ用ログ
         print(f"Processing quantity selection: product={product}, size={size}, price={price}, quantity={quantity}")
+        
+        # 利用制限チェック
+        can_use, limit_message = user_manager.check_usage_limit(user_id)
+        if not can_use:
+            reply = f"❌ {limit_message}\n\n"
+            reply += "プランアップグレードをご検討ください。\n"
+            reply += "「メニュー」→「利用状況確認」で詳細を確認できます。"
+            send_text_message(event.reply_token, reply)
+            return
         
         data = {
             '商品名': product,
@@ -596,6 +626,9 @@ def handle_postback(event):
         success, message = write_to_spreadsheet(data)
         
         if success:
+            # 利用回数を記録
+            user_manager.increment_usage(user_id, "add_product", data)
+            
             reply = f"✅ 商品を追加しました！\n\n"
             reply += f"商品名: {product}\n"
             reply += f"サイズ: {size}\n"
@@ -607,6 +640,11 @@ def handle_postback(event):
             reply = f"❌ エラー: {message}"
         
         send_text_message(event.reply_token, reply)
+        
+    elif action == 'check_usage':
+        # 利用状況確認
+        summary = user_manager.get_usage_summary(user_id)
+        send_text_message(event.reply_token, summary)
         
     elif action == 'update_company':
         # 会社情報更新の案内
