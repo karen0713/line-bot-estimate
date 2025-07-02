@@ -269,31 +269,6 @@ def create_main_menu():
 
 def create_product_selection():
     """商品選択のFlex Messageを作成"""
-    buttons = []
-    for product in PRODUCT_TEMPLATES.keys():
-        buttons.append({
-            "type": "button",
-            "action": {
-                "type": "postback",
-                "label": product,
-                "data": f"action=select_product&product={product}"
-            },
-            "style": "secondary",
-            "margin": "sm"
-        })
-    
-    # カスタム商品入力ボタンを追加
-    buttons.append({
-        "type": "button",
-        "action": {
-            "type": "postback",
-            "label": "カスタム商品を入力",
-            "data": "action=custom_product"
-        },
-        "style": "primary",
-        "margin": "sm"
-    })
-    
     return {
         "type": "bubble",
         "body": {
@@ -302,17 +277,35 @@ def create_product_selection():
             "contents": [
                 {
                     "type": "text",
-                    "text": "商品を選択してください",
+                    "text": "商品を追加",
                     "weight": "bold",
                     "size": "lg",
                     "align": "center"
+                },
+                {
+                    "type": "text",
+                    "text": "カスタム商品を入力してください",
+                    "margin": "md",
+                    "align": "center",
+                    "color": "#666666"
                 }
             ]
         },
         "footer": {
             "type": "box",
             "layout": "vertical",
-            "contents": buttons
+            "contents": [
+                {
+                    "type": "button",
+                    "action": {
+                        "type": "postback",
+                        "label": "カスタム商品を入力",
+                        "data": "action=custom_product"
+                    },
+                    "style": "primary",
+                    "margin": "sm"
+                }
+            ]
         }
     }
 
