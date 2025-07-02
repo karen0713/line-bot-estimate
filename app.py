@@ -30,7 +30,7 @@ def setup_google_sheets():
     """Google Sheets APIの設定"""
     try:
         # 環境変数からサービスアカウント情報を取得
-        service_account_info = os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON')
+        service_account_info = os.environ.get('GOOGLE_SHEETS_CREDENTIALS')
         if service_account_info:
             import json
             creds = Credentials.from_service_account_info(
