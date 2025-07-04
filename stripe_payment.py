@@ -1,6 +1,7 @@
 import stripe
 import os
 from datetime import datetime
+import requests
 
 class StripePayment:
     def __init__(self):
@@ -130,6 +131,32 @@ class StripePayment:
         
         # ここでユーザーのプランを更新
         # user_manager.upgrade_plan(user_id, plan_type)
+
+        # LINE通知処理
+        line_channel_access_token = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN', '')
+        if user_id and line_channel_access_token:
+            headers = {
+                'Authorization': f'Bearer {line_channel_access_token}',
+                'Content-Type': 'application/json'
+            }
+            message = {
+                "to": user_id,
+                "messages": [
+                    {
+                        "type": "text",
+                        "text": "✅ 決済が完了しました！プランが更新されました。ご利用ありがとうございます。"
+                    }
+                ]
+            }
+            try:
+                response = requests.post(
+                    'https://api.line.me/v2/bot/message/push',
+                    headers=headers,
+                    json=message
+                )
+                print(f"LINE通知送信: status={response.status_code}, body={response.text}")
+            except Exception as e:
+                print(f"LINE通知送信エラー: {str(e)}")
         
         return True, f"Checkout completed for user {user_id}, plan {plan_type}"
     
