@@ -55,14 +55,7 @@ class StripePayment:
                 payment_method_types=['card'],
                 line_items=[
                     {
-                        'price_data': {
-                            'currency': 'jpy',
-                            'product_data': {
-                                'name': plan_info['name'],
-                                'description': plan_info['description'],
-                            },
-                            'unit_amount': plan_info['price'],
-                        },
+                        'price': plan_info['stripe_price_id'],
                         'quantity': 1,
                     },
                 ],
