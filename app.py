@@ -519,7 +519,7 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
-    user_text = event.message.text
+    user_text = event.message.text.strip()
     user_id = event.source.user_id
     print(f"Received message from {user_id}: {user_text}")
     
@@ -535,86 +535,45 @@ def handle_message(event):
                 print(f"User registration failed: {message}")
     else:
         print("User management system not available")
-    
-    # 特殊コマンドの処理
-    if user_text.lower() in ['メニュー', 'menu', '開始', 'start']:
-        # メインメニューを表示
+
+    # リッチメニューやテキストコマンドに応じた返答
+    if user_text in ["商品を追加"]:
+        reply = "カスタム商品を追加するには、以下の形式で入力してください：\n\n商品名:○○○○\nサイズ:○○\n単価:○○○○\n数量:○○\n\n例：\n商品名:オリジナルTシャツ\nサイズ:L\n単価:2000\n数量:5"
+        send_text_message(event.reply_token, reply)
+        return
+    elif user_text in ["会社情報を更新"]:
+        reply = "会社情報を更新するには、以下の形式で入力してください：\n\n会社名:○○株式会社\n日付:2024/01/15\n\nまたは、\n会社名:○○株式会社 日付:2024/01/15"
+        send_text_message(event.reply_token, reply)
+        return
+    elif user_text in ["利用状況確認"]:
+        if user_manager:
+            summary = user_manager.get_usage_summary(user_id)
+            send_text_message(event.reply_token, summary)
+        else:
+            send_text_message(event.reply_token, "利用状況の取得に失敗しました。")
+        return
+    elif user_text in ["プランアップグレード"]:
         flex_message = FlexMessage(
-            alt_text="見積書作成システム",
-            contents=FlexContainer.from_dict(create_main_menu())
+            alt_text="プラン選択",
+            contents=FlexContainer.from_dict(create_plan_selection())
         )
         send_flex_message(event.reply_token, flex_message)
         return
-    
-    # 見積書データを解析
-    data = parse_estimate_data(user_text)
-    
-    if data:
-        # 会社情報の更新か商品データの書き込みかを判定
-        is_company_update = '社名' in data or '会社名' in data or '日付' in data
-        is_product_data = '商品名' in data and '単価' in data and '数量' in data
-        
-        if is_company_update and not is_product_data:
-            # 会社情報の更新
-            success, message = update_company_info(data)
-            
-            if success:
-                reply = f"会社情報を更新しました！\n\n"
-                if '社名' in data:
-                    reply += f"会社名: {data['社名']}\n"
-                if '日付' in data:
-                    reply += f"日付: {data['日付']}\n"
-            else:
-                reply = f"エラー: {message}"
-                
-        elif is_product_data:
-            # 利用制限チェック
-            if user_manager:
-                can_use, limit_message = user_manager.check_usage_limit(user_id)
-                if not can_use:
-                    reply = f"❌ {limit_message}\n\n"
-                    reply += "プランアップグレードをご検討ください。\n"
-                    reply += "「メニュー」→「利用状況確認」で詳細を確認できます。"
-                    send_text_message(event.reply_token, reply)
-                    return
-            else:
-                print("User management system not available, skipping usage limit check")
-            
-            # 商品データの書き込み
-            success, message = write_to_spreadsheet(data)
-            
-            if success:
-                # 利用回数を記録
-                if user_manager:
-                    user_manager.increment_usage(user_id, "add_product", data)
-                
-                reply = f"✅ 見積書データを登録しました！\n\n"
-                reply += f"社名: {data.get('社名', 'N/A')}\n"
-                reply += f"商品名: {data.get('商品名', 'N/A')}\n"
-                reply += f"サイズ: {data.get('サイズ', 'N/A')}\n"
-                reply += f"単価: {data.get('単価', 'N/A')}円\n"
-                reply += f"数量: {data.get('数量', 'N/A')}\n"
-                reply += f"料金: {data.get('料金', 'N/A')}円"
-            else:
-                reply = f"エラー: {message}"
-        else:
-            reply = "データの形式が正しくありません。\n\n"
-            reply += "【会社情報更新】\n"
-            reply += "例: 会社名:ABC株式会社 日付:2024/01/15\n\n"
-            reply += "【商品データ登録】\n"
-            reply += "例: 社名:ABC株式会社 商品名:商品A サイズ:M 単価:1000 数量:5\n\n"
-            reply += "または「メニュー」と入力してボタン選択式で入力してください。"
-    else:
-        reply = "見積書作成システムへようこそ！\n\n"
-        reply += "以下の方法で入力できます：\n\n"
-        reply += "1️⃣ **ボタン選択式（推奨）**\n"
-        reply += "「メニュー」と入力してボタンで選択\n\n"
-        reply += "2️⃣ **テキスト入力**\n"
-        reply += "【会社情報更新】\n"
-        reply += "例: 会社名:ABC株式会社 日付:2024/01/15\n\n"
-        reply += "【商品データ登録】\n"
-        reply += "例: 社名:ABC株式会社 商品名:商品A サイズ:M 単価:1000 数量:5"
-    
+    elif user_text in ["見積書を確認"]:
+        reply = "現在の見積書を確認するには、Googleスプレッドシートを直接確認してください。\n\nスプレッドシートURL:\nhttps://docs.google.com/spreadsheets/d/1GkJ8OYwIIMnYqxcwVBNArvk2byFL3UlGHgkyTiV6QU0"
+        send_text_message(event.reply_token, reply)
+        return
+
+    # それ以外は従来通りの案内
+    reply = "見積書作成システムへようこそ！\n\n"
+    reply += "以下の方法で入力できます：\n\n"
+    reply += "1️⃣ **ボタン選択式（推奨）**\n"
+    reply += "「メニュー」と入力してボタンで選択\n\n"
+    reply += "2️⃣ **テキスト入力**\n"
+    reply += "【会社情報更新】\n"
+    reply += "例: 会社名:ABC株式会社 日付:2024/01/15\n\n"
+    reply += "【商品データ登録】\n"
+    reply += "例: 社名:ABC株式会社 商品名:商品A サイズ:M 単価:1000 数量:5"
     send_text_message(event.reply_token, reply)
 
 @handler.add(PostbackEvent)
