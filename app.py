@@ -10,7 +10,7 @@ import re
 import os
 import json
 from user_management import UserManager
-from linepay_payment import LinePayPayment
+from stripe_payment import StripePayment
 
 app = Flask(__name__)
 
@@ -37,13 +37,13 @@ except Exception as e:
     print(f"User management system initialization error: {e}")
     user_manager = None
 
-# LINE Pay決済システムの初期化
+# Stripe決済システムの初期化
 try:
-    linepay = LinePayPayment()
-    print("LINE Pay system initialized successfully")
+    stripe_payment = StripePayment()
+    print("Stripe payment system initialized successfully")
 except Exception as e:
-    print(f"LINE Pay system initialization error: {e}")
-    linepay = None
+    print(f"Stripe payment system initialization error: {e}")
+    stripe_payment = None
 
 # ユーザーセッション管理（簡易版）
 user_sessions = {}
@@ -754,7 +754,7 @@ def handle_postback(event):
 
     elif action == 'upgrade_plan':
         # プラン選択画面を表示
-        if linepay:
+        if stripe_payment:
             flex_message = FlexMessage(
                 alt_text="プラン選択",
                 contents=FlexContainer.from_dict(create_plan_selection())
@@ -767,30 +767,36 @@ def handle_postback(event):
     elif action == 'select_plan':
         # プラン選択時の処理
         plan_type = params.get('plan', '')
-        if linepay and user_manager:
-            # 決済URLを作成
-            success, result = linepay.create_payment_url(plan_type, user_id)
+        print(f"Plan selection: {plan_type} for user {user_id}")
+        
+        if stripe_payment and user_manager:
+            print("Stripe payment and user manager are available")
+            # Stripeチェックアウトセッションを作成
+            success, result = stripe_payment.create_checkout_session(plan_type, user_id)
+            print(f"Checkout session result: success={success}, result={result}")
+            
             if success:
-                payment_url = result['payment_url']
+                checkout_url = result['checkout_url']
                 plan_info = result['plan_info']
                 
                 reply = f"💳 {plan_info['name']}の決済\n\n"
                 reply += f"料金: {plan_info['price']}円\n"
                 reply += f"内容: {plan_info['description']}\n\n"
                 reply += "以下のURLから決済を完了してください：\n"
-                reply += f"{payment_url}\n\n"
+                reply += f"{checkout_url}\n\n"
                 reply += "決済完了後、プランが自動的に更新されます。"
                 
                 # 決済情報をセッションに保存
                 user_sessions[user_id] = {
                     'plan_type': plan_type,
-                    'transaction_id': result['transaction_id'],
-                    'order_id': result['order_id']
+                    'session_id': result['session_id']
                 }
             else:
                 reply = f"決済URLの作成に失敗しました: {result}"
+                print(f"Payment URL creation failed: {result}")
         else:
             reply = "申し訳ございません。決済システムが利用できません。"
+            print(f"Payment system not available: stripe_payment={stripe_payment}, user_manager={user_manager}")
         
         send_text_message(event.reply_token, reply)
 
@@ -824,26 +830,95 @@ def send_flex_message(reply_token, flex_message):
     except Exception as e:
         print(f"Error sending flex message: {e}")
 
-@app.route("/payment/confirm", methods=['GET'])
-def payment_confirm():
-    """決済完了時の処理"""
-    transaction_id = request.args.get('transactionId')
-    order_id = request.args.get('orderId')
+@app.route("/payment/success", methods=['GET'])
+def payment_success():
+    """Stripe決済完了時の処理"""
+    user_id = request.args.get('user_id')
+    plan_type = request.args.get('plan')
     
-    if transaction_id and linepay:
-        # 決済を確定
-        success, result = linepay.confirm_payment(transaction_id, 500)  # 仮の金額
+    if user_id and plan_type and user_manager:
+        # ユーザーのプランを更新
+        success = user_manager.upgrade_plan(user_id, plan_type)
         if success:
-            return "決済が完了しました！プランが更新されました。LINE Botに戻ってご確認ください。"
+            return """
+            <html>
+            <head><title>決済完了</title></head>
+            <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+                <h1>✅ 決済が完了しました！</h1>
+                <p>プランが正常に更新されました。</p>
+                <p>LINE Botに戻ってご確認ください。</p>
+                <p><a href="https://line.me/R/ti/p/@your-bot-id">LINE Botに戻る</a></p>
+            </body>
+            </html>
+            """
         else:
-            return f"決済の確定に失敗しました: {result}"
+            return """
+            <html>
+            <head><title>エラー</title></head>
+            <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+                <h1>❌ エラーが発生しました</h1>
+                <p>プランの更新に失敗しました。</p>
+                <p>サポートにお問い合わせください。</p>
+            </body>
+            </html>
+            """
     
-    return "決済情報が見つかりません。"
+    return """
+    <html>
+    <head><title>エラー</title></head>
+    <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+        <h1>❌ エラーが発生しました</h1>
+        <p>決済情報が見つかりません。</p>
+    </body>
+    </html>
+    """
 
 @app.route("/payment/cancel", methods=['GET'])
 def payment_cancel():
-    """決済キャンセル時の処理"""
-    return "決済がキャンセルされました。LINE Botに戻ってお試しください。"
+    """Stripe決済キャンセル時の処理"""
+    return """
+    <html>
+    <head><title>決済キャンセル</title></head>
+    <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+        <h1>❌ 決済がキャンセルされました</h1>
+        <p>LINE Botに戻ってお試しください。</p>
+        <p><a href="https://line.me/R/ti/p/@your-bot-id">LINE Botに戻る</a></p>
+    </body>
+    </html>
+    """
+
+@app.route("/payment/portal_return", methods=['GET'])
+def payment_portal_return():
+    """Stripeカスタマーポータルからの戻り"""
+    return """
+    <html>
+    <head><title>設定完了</title></head>
+    <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+        <h1>✅ 設定が完了しました</h1>
+        <p>LINE Botに戻ってご確認ください。</p>
+        <p><a href="https://line.me/R/ti/p/@your-bot-id">LINE Botに戻る</a></p>
+    </body>
+    </html>
+    """
+
+@app.route("/stripe/webhook", methods=['POST'])
+def stripe_webhook():
+    """Stripe Webhookの処理"""
+    payload = request.get_data()
+    sig_header = request.headers.get('Stripe-Signature')
+    webhook_secret = os.environ.get('STRIPE_WEBHOOK_SECRET', '')
+    
+    if not webhook_secret:
+        return "Webhook secret not configured", 400
+    
+    if stripe_payment:
+        success, result = stripe_payment.handle_webhook(payload, sig_header, webhook_secret)
+        if success:
+            return "Webhook processed successfully", 200
+        else:
+            return f"Webhook error: {result}", 400
+    
+    return "Stripe payment system not available", 500
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5002))

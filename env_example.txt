@@ -1,0 +1,17 @@
+# LINE Bot設定
+LINE_CHANNEL_ACCESS_TOKEN=your_line_channel_access_token
+LINE_CHANNEL_SECRET=your_line_channel_secret
+
+# Google Sheets設定
+SPREADSHEET_ID=your_spreadsheet_id
+SHEET_NAME=your_sheet_name
+GOOGLE_SHEETS_CREDENTIALS={"type": "service_account", ...}
+
+# Stripe設定
+STRIPE_SECRET_KEY=sk_test_...  # テスト用秘密鍵
+STRIPE_PUBLISHABLE_KEY=pk_test_...  # テスト用公開鍵
+STRIPE_WEBHOOK_SECRET=whsec_...  # Webhook秘密鍵
+
+# Stripe商品・価格ID（Stripeダッシュボードで作成後）
+STRIPE_BASIC_PRICE_ID=price_...  # ベーシックプランの価格ID
+STRIPE_PRO_PRICE_ID=price_...    # プロプランの価格ID 
