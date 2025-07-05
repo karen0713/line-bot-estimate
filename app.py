@@ -516,6 +516,16 @@ def create_rich_menu():
     try:
         with ApiClient(configuration) as api_client:
             messaging_api = MessagingApi(api_client)
+            
+            # 既存のリッチメニューを削除
+            try:
+                rich_menus = messaging_api.get_rich_menu_list()
+                for rich_menu in rich_menus.richmenus:
+                    messaging_api.delete_rich_menu(rich_menu.rich_menu_id)
+                    print(f"Deleted existing rich menu: {rich_menu.rich_menu_id}")
+            except Exception as e:
+                print(f"Error deleting existing rich menus: {e}")
+            
             rich_menu_dict = {
                 "size": {"width": 1200, "height": 405},
                 "selected": False,
