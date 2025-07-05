@@ -572,7 +572,7 @@ def create_rich_menu_endpoint():
     except Exception as e:
         return f"Error: {str(e)}"
 
-@app.route("/webhook", methods=['POST'])
+@app.route("/callback", methods=['POST'])
 def callback():
     signature = request.headers['X-Line-Signature']
     body = request.get_data(as_text=True)
