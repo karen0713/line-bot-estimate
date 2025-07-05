@@ -680,11 +680,16 @@ def handle_message(event):
         reply = "📝 スプレッドシートを登録してください\n\n"
         reply += "以下の形式でGoogleスプレッドシートのURLを送信してください：\n\n"
         reply += "スプレッドシート登録:https://docs.google.com/spreadsheets/d/xxxxxxx\n\n"
-        reply += "例：\n"
-        reply += "スプレッドシート登録:https://docs.google.com/spreadsheets/d/1GkJ8OYwIIMnYqxcwVBNArvk2byFL3UlGHgkyTiV6QU0\n\n"
-        reply += "⚠️ 注意：\n"
+        reply += "⚠️ 重要：\n"
+        reply += "• 新しいスプレッドシートを作成してください\n"
         reply += "• スプレッドシートは共有設定で「編集者」に設定してください\n"
-        reply += "• 見積書フォーマットのシート名は「比較見積書 ロング」を推奨します"
+        reply += "• 見積書フォーマットのシート名は「比較見積書 ロング」を推奨します\n\n"
+        reply += "📋 手順：\n"
+        reply += "1. Googleスプレッドシートを新規作成\n"
+        reply += "2. シート名を「比較見積書 ロング」に変更\n"
+        reply += "3. 共有設定で「編集者」に設定\n"
+        reply += "4. URLをコピーして以下の形式で送信：\n"
+        reply += "スプレッドシート登録:【あなたのスプレッドシートURL】"
         send_text_message(event.reply_token, reply)
         return
 
