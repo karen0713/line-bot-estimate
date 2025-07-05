@@ -665,38 +665,51 @@ def handle_message(event):
     # スプレッドシート管理機能
     elif user_text.startswith("スプレッドシート登録:"):
         # スプレッドシートURLからIDを抽出
-        url = user_text.replace("スプレッドシート登録:", "").strip()
+        url_part = user_text.replace("スプレッドシート登録:", "").strip()
+        
+        # URLとシート名を分離（シート名が指定されている場合）
+        if "シート名:" in url_part:
+            url, sheet_name = url_part.split("シート名:", 1)
+            url = url.strip()
+            sheet_name = sheet_name.strip()
+        else:
+            url = url_part
+            sheet_name = None
+        
         spreadsheet_id = extract_spreadsheet_id(url)
         
         if spreadsheet_id:
-            # スプレッドシートの実際のシート名を取得
-            try:
-                client = setup_google_sheets()
-                if client:
-                    spreadsheet = client.open_by_key(spreadsheet_id)
-                    # 最初のシートの名前を取得
-                    first_sheet = spreadsheet.get_worksheet(0)
-                    sheet_name = first_sheet.title
-                    print(f"取得したシート名: {sheet_name}")
-                else:
+            # シート名が指定されていない場合は実際のシート名を取得
+            if not sheet_name:
+                try:
+                    client = setup_google_sheets()
+                    if client:
+                        spreadsheet = client.open_by_key(spreadsheet_id)
+                        # 最初のシートの名前を取得
+                        first_sheet = spreadsheet.get_worksheet(0)
+                        sheet_name = first_sheet.title
+                        print(f"取得したシート名: {sheet_name}")
+                    else:
+                        sheet_name = "比較見積書 ロング"  # フォールバック
+                except Exception as e:
+                    print(f"シート名取得エラー: {e}")
                     sheet_name = "比較見積書 ロング"  # フォールバック
-            except Exception as e:
-                print(f"シート名取得エラー: {e}")
-                sheet_name = "比較見積書 ロング"  # フォールバック
             
             success, message = user_manager.set_user_spreadsheet(user_id, spreadsheet_id, sheet_name)
             if success:
                 reply = f"✅ スプレッドシートを登録しました！\n\n"
-                reply += f"スプレッドシートURL:\n"
+                reply += f"📊 スプレッドシートURL:\n"
                 reply += f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}\n\n"
-                reply += f"シート名: {sheet_name}\n\n"
+                reply += f"📋 シート名: {sheet_name}\n\n"
                 reply += "これで商品データがこのスプレッドシートに反映されます。"
             else:
                 reply = f"❌ 登録エラー: {message}"
         else:
             reply = "❌ スプレッドシートURLが正しくありません。\n\n"
             reply += "正しい形式：\n"
-            reply += "スプレッドシート登録:https://docs.google.com/spreadsheets/d/..."
+            reply += "スプレッドシート登録:https://docs.google.com/spreadsheets/d/xxxxxxx\n\n"
+            reply += "または、シート名を指定：\n"
+            reply += "スプレッドシート登録:https://docs.google.com/spreadsheets/d/xxxxxxx シート名:見積書"
         send_text_message(event.reply_token, reply)
         return
 
@@ -723,17 +736,20 @@ def handle_message(event):
     elif user_text == "スプレッドシート登録":
         reply = "📝 スプレッドシートを登録してください\n\n"
         reply += "以下の形式でGoogleスプレッドシートのURLを送信してください：\n\n"
+        reply += "📊 基本形式：\n"
         reply += "スプレッドシート登録:https://docs.google.com/spreadsheets/d/xxxxxxx\n\n"
+        reply += "📋 シート名を指定する場合：\n"
+        reply += "スプレッドシート登録:https://docs.google.com/spreadsheets/d/xxxxxxx シート名:見積書\n\n"
         reply += "⚠️ 重要：\n"
         reply += "• 新しいスプレッドシートを作成してください\n"
         reply += "• スプレッドシートは共有設定で「編集者」に設定してください\n"
-        reply += "• 見積書フォーマットのシート名は「比較見積書 ロング」を推奨します\n\n"
+        reply += "• シート名を指定しない場合は、最初のシートが使用されます\n\n"
         reply += "📋 手順：\n"
         reply += "1. Googleスプレッドシートを新規作成\n"
-        reply += "2. シート名を「比較見積書 ロング」に変更\n"
+        reply += "2. シート名を変更（例：「見積書」）\n"
         reply += "3. 共有設定で「編集者」に設定\n"
         reply += "4. URLをコピーして以下の形式で送信：\n"
-        reply += "スプレッドシート登録:【あなたのスプレッドシートURL】"
+        reply += "スプレッドシート登録:【URL】 シート名:【シート名】"
         send_text_message(event.reply_token, reply)
         return
 
