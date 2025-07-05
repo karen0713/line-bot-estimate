@@ -582,6 +582,25 @@ def create_rich_menu_endpoint():
     except Exception as e:
         return f"Error: {str(e)}"
 
+@app.route("/delete-rich-menu", methods=['GET'])
+def delete_rich_menu_endpoint():
+    """リッチメニュー削除エンドポイント"""
+    try:
+        with ApiClient(configuration) as api_client:
+            messaging_api = MessagingApi(api_client)
+            
+            # 既存のリッチメニューを削除
+            rich_menus = messaging_api.get_rich_menu_list()
+            deleted_count = 0
+            for rich_menu in rich_menus.richmenus:
+                messaging_api.delete_rich_menu(rich_menu.rich_menu_id)
+                deleted_count += 1
+                print(f"Deleted rich menu: {rich_menu.rich_menu_id}")
+            
+            return f"Deleted {deleted_count} rich menus successfully"
+    except Exception as e:
+        return f"Error deleting rich menus: {str(e)}"
+
 @app.route("/callback", methods=['POST'])
 def callback():
     signature = request.headers['X-Line-Signature']
