@@ -196,16 +196,27 @@ def write_to_spreadsheet(data, user_id=None):
         print(f"Spreadsheet write error: {e}")
         return False, f"書き込みエラー: {str(e)}"
 
-def update_company_info(data):
+def update_company_info(data, user_id=None):
     """会社名と日付を更新"""
     try:
         print(f"開始: 会社情報更新処理")
+        
+        # 顧客のスプレッドシートIDを取得
+        if user_id and user_manager:
+            spreadsheet_id, sheet_name = user_manager.get_user_spreadsheet(user_id)
+            if not spreadsheet_id:
+                spreadsheet_id = SPREADSHEET_ID  # デフォルト
+                sheet_name = SHEET_NAME
+        else:
+            spreadsheet_id = SPREADSHEET_ID
+            sheet_name = SHEET_NAME
+        
         client = setup_google_sheets()
         if not client:
             print("エラー: Google Sheets接続失敗")
             return False, "Google Sheets接続エラー"
         
-        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
+        sheet = client.open_by_key(spreadsheet_id).worksheet(sheet_name)
         updates = []
         
         # 会社名を更新（A2:H3セル）
@@ -658,11 +669,27 @@ def handle_message(event):
         spreadsheet_id = extract_spreadsheet_id(url)
         
         if spreadsheet_id:
-            success, message = user_manager.set_user_spreadsheet(user_id, spreadsheet_id)
+            # スプレッドシートの実際のシート名を取得
+            try:
+                client = setup_google_sheets()
+                if client:
+                    spreadsheet = client.open_by_key(spreadsheet_id)
+                    # 最初のシートの名前を取得
+                    first_sheet = spreadsheet.get_worksheet(0)
+                    sheet_name = first_sheet.title
+                    print(f"取得したシート名: {sheet_name}")
+                else:
+                    sheet_name = "比較見積書 ロング"  # フォールバック
+            except Exception as e:
+                print(f"シート名取得エラー: {e}")
+                sheet_name = "比較見積書 ロング"  # フォールバック
+            
+            success, message = user_manager.set_user_spreadsheet(user_id, spreadsheet_id, sheet_name)
             if success:
                 reply = f"✅ スプレッドシートを登録しました！\n\n"
                 reply += f"スプレッドシートURL:\n"
                 reply += f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}\n\n"
+                reply += f"シート名: {sheet_name}\n\n"
                 reply += "これで商品データがこのスプレッドシートに反映されます。"
             else:
                 reply = f"❌ 登録エラー: {message}"
@@ -719,7 +746,7 @@ def handle_message(event):
 
         if is_company_update and not is_product_data:
             # 会社情報の更新
-            success, message = update_company_info(data)
+            success, message = update_company_info(data, user_id)
             if success:
                 reply = f"会社情報を更新しました！\n\n"
                 if '社名' in data:
