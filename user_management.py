@@ -21,7 +21,7 @@ class UserManager:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
-            # ユーザーテーブルの作成
+            # ユーザーテーブルの作成（スプレッドシート管理機能を追加）
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     user_id TEXT PRIMARY KEY,
@@ -30,9 +30,22 @@ class UserManager:
                     plan_type TEXT DEFAULT 'free',
                     monthly_usage INTEGER DEFAULT 0,
                     last_reset_date DATE DEFAULT CURRENT_DATE,
-                    is_active BOOLEAN DEFAULT 1
+                    is_active BOOLEAN DEFAULT 1,
+                    spreadsheet_id TEXT,
+                    sheet_name TEXT DEFAULT '比較見積書 ロング'
                 )
             ''')
+            
+            # 既存のテーブルにカラムが存在しない場合は追加
+            try:
+                cursor.execute('ALTER TABLE users ADD COLUMN spreadsheet_id TEXT')
+            except sqlite3.OperationalError:
+                pass  # カラムが既に存在する場合
+            
+            try:
+                cursor.execute('ALTER TABLE users ADD COLUMN sheet_name TEXT DEFAULT "比較見積書 ロング"')
+            except sqlite3.OperationalError:
+                pass  # カラムが既に存在する場合
             
             # 利用履歴テーブルの作成
             cursor.execute('''
@@ -227,8 +240,37 @@ class UserManager:
             ''', (plan_type, user_id))
             
             conn.commit()
-            return True, f"プランを{plan_type}にアップグレードしました"
+            return True
         except Exception as e:
-            return False, f"アップグレードエラー: {str(e)}"
+            print(f"Plan upgrade error: {e}")
+            return False
         finally:
-            conn.close() 
+            conn.close()
+
+    def set_user_spreadsheet(self, user_id, spreadsheet_id, sheet_name="比較見積書 ロング"):
+        """顧客のスプレッドシートIDを設定"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE users 
+                SET spreadsheet_id = ?, sheet_name = ?
+                WHERE user_id = ?
+            ''', (spreadsheet_id, sheet_name, user_id))
+            conn.commit()
+            conn.close()
+            return True, "スプレッドシートを登録しました"
+        except Exception as e:
+            return False, f"登録エラー: {str(e)}"
+
+    def get_user_spreadsheet(self, user_id):
+        """顧客のスプレッドシートIDを取得"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute('SELECT spreadsheet_id, sheet_name FROM users WHERE user_id = ?', (user_id,))
+            result = cursor.fetchone()
+            conn.close()
+            return result if result else (None, None)
+        except Exception as e:
+            return None, None 

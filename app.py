@@ -1,7 +1,9 @@
 from flask import Flask, request, abort, redirect, url_for
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
-from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage, FlexMessage, FlexContainer
+from linebot.v3.messaging import (
+    Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage, FlexMessage, FlexContainer
+)
 from linebot.v3.webhooks import MessageEvent, TextMessageContent, PostbackEvent
 import gspread
 from google.oauth2.service_account import Credentials
@@ -77,57 +79,68 @@ def setup_google_sheets():
         return None
 
 def parse_estimate_data(text):
-    """LINEメッセージから見積書データを解析"""
-    # 例: "社名:ABC株式会社 商品名:商品A サイズ:M 単価:1000 数量:5"
-    # 例: "会社名:ABC株式会社 日付:2024/01/15"
+    """1行ずつ項目名:値を抽出し、柔軟に辞書化"""
     data = {}
-    
-    # 改行をスペースに変換して処理しやすくする
-    text = text.replace('\n', ' ')
-    
-    # パターンマッチングでデータを抽出
-    patterns = {
-        '社名': r'社名[：:]\s*([^\s]+)',
-        '会社名': r'会社名[：:]\s*([^\s]+)',
-        '商品名': r'商品名[：:]*\s*([^\s]+)',  # コロンが抜けている場合も対応
-        'サイズ': r'サイズ[：:]\s*([^\s]+)',
-        '単価': r'単価[：:]\s*(\d+)',
-        '数量': r'数量[：:]\s*(\d+)',
-        '日付': r'日付[：:]\s*([^\s]+)'
-    }
-    
-    for key, pattern in patterns.items():
-        match = re.search(pattern, text)
-        if match:
-            data[key] = match.group(1)
-    
+    lines = text.replace('\r', '').split('\n')
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        # コロンで分割（全角・半角両対応）
+        if ':' in line:
+            key, value = line.split(':', 1)
+        elif '：' in line:
+            key, value = line.split('：', 1)
+        else:
+            continue
+        key = key.strip()
+        value = value.strip()
+        if key in ['社名', '会社名', '商品名', 'サイズ', '単価', '数量', '日付']:
+            data[key] = value
     # 社名と会社名を統一
     if '会社名' in data and '社名' not in data:
         data['社名'] = data['会社名']
-    
-    # 料金を計算（商品データがある場合のみ）
+    # 料金を計算
     if '単価' in data and '数量' in data:
         try:
-            unit_price = int(data['単価'])
-            quantity = int(data['数量'])
+            unit_price = int(re.sub(r'[^0-9]', '', data['単価']))
+            quantity = int(re.sub(r'[^0-9]', '', data['数量']))
             data['料金'] = unit_price * quantity
         except ValueError:
             data['料金'] = 0
-    
+    print(f"parse_estimate_data: {data}")
     return data
 
-def write_to_spreadsheet(data):
-    """スプレッドシートにデータを書き込み"""
+def extract_spreadsheet_id(url):
+    """GoogleスプレッドシートURLからIDを抽出"""
+    import re
+    pattern = r'/spreadsheets/d/([a-zA-Z0-9-_]+)'
+    match = re.search(pattern, url)
+    return match.group(1) if match else None
+
+def write_to_spreadsheet(data, user_id=None):
+    """スプレッドシートにデータを書き込み（顧客別対応）"""
     try:
         print(f"開始: スプレッドシート書き込み処理")
+        
+        # 顧客のスプレッドシートIDを取得
+        if user_id and user_manager:
+            spreadsheet_id, sheet_name = user_manager.get_user_spreadsheet(user_id)
+            if not spreadsheet_id:
+                spreadsheet_id = SPREADSHEET_ID  # デフォルト
+                sheet_name = SHEET_NAME
+        else:
+            spreadsheet_id = SPREADSHEET_ID
+            sheet_name = SHEET_NAME
+        
         client = setup_google_sheets()
         if not client:
             print("エラー: Google Sheets接続失敗")
             return False, "Google Sheets接続エラー"
         
         print(f"成功: Google Sheets接続")
-        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
-        print(f"成功: シート '{SHEET_NAME}' を開きました")
+        sheet = client.open_by_key(spreadsheet_id).worksheet(sheet_name)
+        print(f"成功: シート '{sheet_name}' を開きました")
         
         # 現在の日付を取得
         current_date = datetime.now().strftime('%Y/%m/%d')
@@ -498,9 +511,66 @@ def create_plan_selection():
         }
     }
 
+def create_rich_menu():
+    """リッチメニューを作成"""
+    try:
+        with ApiClient(configuration) as api_client:
+            messaging_api = MessagingApi(api_client)
+            rich_menu_dict = {
+                "size": {"width": 1200, "height": 405},
+                "selected": False,
+                "name": "見積書作成メニュー",
+                "chatBarText": "メニュー",
+                "areas": [
+                    {
+                        "bounds": {"x": 0, "y": 0, "width": 200, "height": 405},
+                        "action": {"type": "message", "label": "商品を追加", "text": "商品を追加"}
+                    },
+                    {
+                        "bounds": {"x": 200, "y": 0, "width": 200, "height": 405},
+                        "action": {"type": "message", "label": "プランアップグレード", "text": "プランアップグレード"}
+                    },
+                    {
+                        "bounds": {"x": 400, "y": 0, "width": 200, "height": 405},
+                        "action": {"type": "message", "label": "会社情報を更新", "text": "会社情報を更新"}
+                    },
+                    {
+                        "bounds": {"x": 600, "y": 0, "width": 200, "height": 405},
+                        "action": {"type": "message", "label": "利用状況確認", "text": "利用状況確認"}
+                    },
+                    {
+                        "bounds": {"x": 800, "y": 0, "width": 200, "height": 405},
+                        "action": {"type": "message", "label": "見積書を確認", "text": "見積書を確認"}
+                    },
+                    {
+                        "bounds": {"x": 1000, "y": 0, "width": 200, "height": 405},
+                        "action": {"type": "message", "label": "スプレッドシート登録", "text": "スプレッドシート登録"}
+                    }
+                ]
+            }
+            rich_menu_id = messaging_api.create_rich_menu(rich_menu_dict).rich_menu_id
+            messaging_api.set_default_rich_menu(rich_menu_id)
+            print(f"Rich menu created and set as default: {rich_menu_id}")
+            return rich_menu_id
+    except Exception as e:
+        print(f"Rich menu creation error: {e}")
+        return None
+
 @app.route("/", methods=['GET'])
 def index():
-    return "LINE Bot Server is running!"
+    return "LINE Bot is running!"
+
+@app.route("/create-rich-menu", methods=['GET'])
+def create_rich_menu_endpoint():
+    """リッチメニュー作成エンドポイント"""
+    try:
+        rich_menu_id = create_rich_menu()
+        if rich_menu_id:
+            return f"Rich menu created successfully! ID: {rich_menu_id}"
+        else:
+            return "Failed to create rich menu"
+    except Exception as e:
+        return f"Error: {str(e)}"
 
 @app.route("/webhook", methods=['POST'])
 def callback():
@@ -564,7 +634,120 @@ def handle_message(event):
         send_text_message(event.reply_token, reply)
         return
 
-    # それ以外は従来通りの案内
+    # スプレッドシート管理機能
+    elif user_text.startswith("スプレッドシート登録:"):
+        # スプレッドシートURLからIDを抽出
+        url = user_text.replace("スプレッドシート登録:", "").strip()
+        spreadsheet_id = extract_spreadsheet_id(url)
+        
+        if spreadsheet_id:
+            success, message = user_manager.set_user_spreadsheet(user_id, spreadsheet_id)
+            if success:
+                reply = f"✅ スプレッドシートを登録しました！\n\n"
+                reply += f"スプレッドシートURL:\n"
+                reply += f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}\n\n"
+                reply += "これで商品データがこのスプレッドシートに反映されます。"
+            else:
+                reply = f"❌ 登録エラー: {message}"
+        else:
+            reply = "❌ スプレッドシートURLが正しくありません。\n\n"
+            reply += "正しい形式：\n"
+            reply += "スプレッドシート登録:https://docs.google.com/spreadsheets/d/..."
+        send_text_message(event.reply_token, reply)
+        return
+
+    elif user_text == "スプレッドシート確認":
+        print(f"スプレッドシート確認処理開始: user_id={user_id}")
+        if user_manager:
+            spreadsheet_id, sheet_name = user_manager.get_user_spreadsheet(user_id)
+            print(f"取得結果: spreadsheet_id={spreadsheet_id}, sheet_name={sheet_name}")
+            if spreadsheet_id:
+                reply = f"📊 あなたのスプレッドシート\n\n"
+                reply += f"スプレッドシートURL:\n"
+                reply += f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}\n\n"
+                reply += f"シート名: {sheet_name}"
+            else:
+                reply = "❌ スプレッドシートが登録されていません。\n\n"
+                reply += "登録方法：\n"
+                reply += "スプレッドシート登録:https://docs.google.com/spreadsheets/d/..."
+        else:
+            print("user_manager is None")
+            reply = "❌ システムエラー: ユーザー管理システムが利用できません。"
+        send_text_message(event.reply_token, reply)
+        return
+
+    elif user_text == "スプレッドシート登録":
+        reply = "📝 スプレッドシートを登録してください\n\n"
+        reply += "以下の形式でGoogleスプレッドシートのURLを送信してください：\n\n"
+        reply += "スプレッドシート登録:https://docs.google.com/spreadsheets/d/xxxxxxx\n\n"
+        reply += "例：\n"
+        reply += "スプレッドシート登録:https://docs.google.com/spreadsheets/d/1GkJ8OYwIIMnYqxcwVBNArvk2byFL3UlGHgkyTiV6QU0\n\n"
+        reply += "⚠️ 注意：\n"
+        reply += "• スプレッドシートは共有設定で「編集者」に設定してください\n"
+        reply += "• 見積書フォーマットのシート名は「比較見積書 ロング」を推奨します"
+        send_text_message(event.reply_token, reply)
+        return
+
+    # それ以外は従来通りの案内＋データ解析・登録
+    data = parse_estimate_data(user_text)
+    if data:
+        # 会社情報の更新か商品データの書き込みかを判定
+        is_company_update = '社名' in data or '会社名' in data or '日付' in data
+        is_product_data = '商品名' in data and '単価' in data and '数量' in data
+
+        if is_company_update and not is_product_data:
+            # 会社情報の更新
+            success, message = update_company_info(data)
+            if success:
+                reply = f"会社情報を更新しました！\n\n"
+                if '社名' in data:
+                    reply += f"会社名: {data['社名']}\n"
+                if '日付' in data:
+                    reply += f"日付: {data['日付']}\n"
+            else:
+                reply = f"エラー: {message}"
+
+        elif is_product_data:
+            # 利用制限チェック
+            if user_manager:
+                can_use, limit_message = user_manager.check_usage_limit(user_id)
+                if not can_use:
+                    reply = f"❌ {limit_message}\n\n"
+                    reply += "プランアップグレードをご検討ください。\n"
+                    reply += "「メニュー」→「利用状況確認」で詳細を確認できます。"
+                    send_text_message(event.reply_token, reply)
+                    return
+            else:
+                print("User management system not available, skipping usage limit check")
+
+            # 商品データの書き込み
+            success, message = write_to_spreadsheet(data, user_id)
+            if success:
+                # 利用回数を記録
+                if user_manager:
+                    user_manager.increment_usage(user_id, "add_product", data)
+                reply = f"✅ 見積書を作成しました！\n\n"
+                reply += f"📋 登録内容:\n"
+                reply += f"社名: {data.get('社名', 'N/A')}\n"
+                reply += f"商品名: {data.get('商品名', 'N/A')}\n"
+                reply += f"サイズ: {data.get('サイズ', 'N/A')}\n"
+                reply += f"単価: {data.get('単価', 'N/A')}\n"
+                reply += f"数量: {data.get('数量', 'N/A')}\n"
+                reply += f"料金: {data.get('料金', 'N/A')}\n\n"
+                reply += f"📊 スプレッドシートに反映されました。"
+            else:
+                reply = f"❌ 見積書作成エラー: {message}"
+        else:
+            reply = "データの形式が正しくありません。\n\n"
+            reply += "【会社情報更新】\n"
+            reply += "例: 会社名:ABC株式会社 日付:2024/01/15\n\n"
+            reply += "【商品データ登録】\n"
+            reply += "例: 社名:ABC株式会社 商品名:商品A サイズ:M 単価:1000 数量:5\n\n"
+            reply += "または「メニュー」と入力してボタン選択式で入力してください。"
+        send_text_message(event.reply_token, reply)
+        return
+
+    # 何も該当しない場合のみ案内
     reply = "見積書作成システムへようこそ！\n\n"
     reply += "以下の方法で入力できます：\n\n"
     reply += "1️⃣ **ボタン選択式（推奨）**\n"
@@ -668,7 +851,7 @@ def handle_postback(event):
             '料金': int(price) * int(quantity)
         }
         
-        success, message = write_to_spreadsheet(data)
+        success, message = write_to_spreadsheet(data, user_id)
         
         if success:
             # 利用回数を記録
@@ -881,4 +1064,5 @@ def stripe_webhook():
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5002))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    debug_mode = os.environ.get('FLASK_ENV') == 'development'
+    app.run(host='0.0.0.0', port=port, debug=debug_mode)
