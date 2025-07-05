@@ -544,16 +544,12 @@ def create_rich_menu():
                 "chatBarText": "メニュー",
                 "areas": [
                     {
-                        "bounds": {"x": 0, "y": 0, "width": 400, "height": 405},
+                        "bounds": {"x": 0, "y": 0, "width": 600, "height": 405},
                         "action": {"type": "message", "label": "商品を追加", "text": "商品を追加"}
                     },
                     {
-                        "bounds": {"x": 400, "y": 0, "width": 400, "height": 405},
+                        "bounds": {"x": 600, "y": 0, "width": 600, "height": 405},
                         "action": {"type": "message", "label": "スプレッドシート登録", "text": "スプレッドシート登録"}
-                    },
-                    {
-                        "bounds": {"x": 800, "y": 0, "width": 400, "height": 405},
-                        "action": {"type": "message", "label": "利用状況確認", "text": "利用状況確認"}
                     }
                 ]
             }
