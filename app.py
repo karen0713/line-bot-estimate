@@ -533,28 +533,16 @@ def create_rich_menu():
                 "chatBarText": "メニュー",
                 "areas": [
                     {
-                        "bounds": {"x": 0, "y": 0, "width": 200, "height": 405},
+                        "bounds": {"x": 0, "y": 0, "width": 400, "height": 405},
                         "action": {"type": "message", "label": "商品を追加", "text": "商品を追加"}
                     },
                     {
-                        "bounds": {"x": 200, "y": 0, "width": 200, "height": 405},
-                        "action": {"type": "message", "label": "プランアップグレード", "text": "プランアップグレード"}
-                    },
-                    {
-                        "bounds": {"x": 400, "y": 0, "width": 200, "height": 405},
-                        "action": {"type": "message", "label": "会社情報を更新", "text": "会社情報を更新"}
-                    },
-                    {
-                        "bounds": {"x": 600, "y": 0, "width": 200, "height": 405},
-                        "action": {"type": "message", "label": "利用状況確認", "text": "利用状況確認"}
-                    },
-                    {
-                        "bounds": {"x": 800, "y": 0, "width": 200, "height": 405},
-                        "action": {"type": "message", "label": "見積書を確認", "text": "見積書を確認"}
-                    },
-                    {
-                        "bounds": {"x": 1000, "y": 0, "width": 200, "height": 405},
+                        "bounds": {"x": 400, "y": 0, "width": 400, "height": 405},
                         "action": {"type": "message", "label": "スプレッドシート登録", "text": "スプレッドシート登録"}
+                    },
+                    {
+                        "bounds": {"x": 800, "y": 0, "width": 400, "height": 405},
+                        "action": {"type": "message", "label": "利用状況確認", "text": "利用状況確認"}
                     }
                 ]
             }
