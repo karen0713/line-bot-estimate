@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LINE Bot Solutions - ビジネス自動化サービス</title>
+    <style>
+        body {
+            font-family: 'Arial', sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 0;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            text-align: center;
+            padding: 60px 20px;
+            border-radius: 10px;
+            margin-bottom: 40px;
+        }
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 20px;
+        }
+        .header p {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+            margin-bottom: 40px;
+        }
+        .feature {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .feature h3 {
+            color: #333;
+            margin-bottom: 15px;
+        }
+        .pricing {
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        .pricing h2 {
+            color: #333;
+            margin-bottom: 30px;
+        }
+        .pricing-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+        }
+        .pricing-card {
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 30px;
+            transition: transform 0.3s ease;
+        }
+        .pricing-card:hover {
+            transform: translateY(-5px);
+            border-color: #667eea;
+        }
+        .pricing-card.featured {
+            border-color: #667eea;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .price {
+            font-size: 2em;
+            font-weight: bold;
+            margin: 20px 0;
+        }
+        .contact {
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .btn {
+            display: inline-block;
+            padding: 12px 30px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            text-decoration: none;
+            border-radius: 25px;
+            transition: transform 0.3s ease;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+        .footer {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+            margin-top: 40px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>LINE Bot Solutions</h1>
+            <p>ビジネス自動化で業務効率を向上させるLINE Botサービス</p>
+        </div>
+
+        <div class="features">
+            <div class="feature">
+                <h3>📊 見積書作成システム</h3>
+                <p>LINEで商品情報を送信するだけで、Googleスプレッドシートに自動反映。プロフェッショナルな見積書を簡単に作成できます。</p>
+            </div>
+            <div class="feature">
+                <h3>🤖 自動化</h3>
+                <p>手作業でのデータ入力が不要。LINE Botが自動的に情報を整理し、見積書を生成します。</p>
+            </div>
+            <div class="feature">
+                <h3>📱 簡単操作</h3>
+                <p>LINEアプリから簡単に操作。特別な技術知識は不要で、誰でもすぐに使い始められます。</p>
+            </div>
+        </div>
+
+        <div class="pricing">
+            <h2>料金プラン</h2>
+            <div class="pricing-cards">
+                <div class="pricing-card">
+                    <h3>無料プラン</h3>
+                    <div class="price">¥0</div>
+                    <ul>
+                        <li>月10件まで利用可能</li>
+                        <li>基本的な見積書機能</li>
+                        <li>スプレッドシート連携</li>
+                    </ul>
+                </div>
+                <div class="pricing-card featured">
+                    <h3>ベーシックプラン</h3>
+                    <div class="price">¥500/月</div>
+                    <ul>
+                        <li>月100件まで利用可能</li>
+                        <li>全機能利用</li>
+                        <li>利用履歴管理</li>
+                    </ul>
+                </div>
+                <div class="pricing-card">
+                    <h3>プロプラン</h3>
+                    <div class="price">¥1,000/月</div>
+                    <ul>
+                        <li>無制限利用</li>
+                        <li>全機能利用</li>
+                        <li>優先サポート</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="contact">
+            <h2>お問い合わせ</h2>
+            <p>サービスについてのご質問やご相談がございましたら、お気軽にお問い合わせください。</p>
+            <a href="mailto:info@linebotsolutions.com" class="btn">お問い合わせ</a>
+        </div>
+
+        <div class="footer">
+            <p>&copy; 2025 LINE Bot Solutions. All rights reserved.</p>
+            <p>サービスURL: <a href="https://line-bot-estimate.onrender.com/">https://line-bot-estimate.onrender.com/</a></p>
+        </div>
+    </div>
+</body>
+</html> 
