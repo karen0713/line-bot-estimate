@@ -110,28 +110,32 @@ class UserManager:
         return None
     
     def check_usage_limit(self, user_id):
-        """利用制限チェック"""
-        user_info = self.get_user_info(user_id)
-        if not user_info:
-            return False, "ユーザーが見つかりません"
+        """利用制限チェック（開発者用：一時的に無効化）"""
+        # 開発者用：利用制限を一時的に無効化
+        return True, "開発者モード：利用制限なし"
         
-        # 月次リセット処理
-        self.reset_monthly_usage_if_needed(user_id)
-        
-        # 利用制限チェック
-        if user_info['plan_type'] == 'free':
-            limit = 10
-        elif user_info['plan_type'] == 'basic':
-            limit = 100
-        else:  # pro
-            limit = 999999
-        
-        current_usage = self.get_current_monthly_usage(user_id)
-        
-        if current_usage >= limit:
-            return False, f"利用制限に達しました（月{limit}件まで）"
-        
-        return True, f"利用可能（残り{limit - current_usage}件）"
+        # 元のコード（コメントアウト）
+        # user_info = self.get_user_info(user_id)
+        # if not user_info:
+        #     return False, "ユーザーが見つかりません"
+        # 
+        # # 月次リセット処理
+        # self.reset_monthly_usage_if_needed(user_id)
+        # 
+        # # 利用制限チェック
+        # if user_info['plan_type'] == 'free':
+        #     limit = 10
+        # elif user_info['plan_type'] == 'basic':
+        #     limit = 100
+        # else:  # pro
+        #     limit = 999999
+        # 
+        # current_usage = self.get_current_monthly_usage(user_id)
+        # 
+        # if current_usage >= limit:
+        #     return False, f"利用制限に達しました（月{limit}件まで）"
+        # 
+        # return True, f"利用可能（残り{limit - current_usage}件）"
     
     def reset_monthly_usage_if_needed(self, user_id):
         """月次利用回数のリセット"""
@@ -249,7 +253,9 @@ class UserManager:
 
     def set_user_spreadsheet(self, user_id, spreadsheet_id, sheet_name="比較見積書 ロング"):
         """顧客のスプレッドシートIDを設定"""
+        print(f"set_user_spreadsheet: user_id={user_id}, spreadsheet_id={spreadsheet_id}, sheet_name={sheet_name}")
         try:
+            # --- シート名を正規化 ---
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             cursor.execute('''
@@ -271,6 +277,10 @@ class UserManager:
             cursor.execute('SELECT spreadsheet_id, sheet_name FROM users WHERE user_id = ?', (user_id,))
             result = cursor.fetchone()
             conn.close()
-            return result if result else (None, None)
+            if result:
+                print(f"get_user_spreadsheet: user_id={user_id}, spreadsheet_id={result[0]}, sheet_name={result[1]}")
+                # --- シート名を正規化 ---
+                return result[0], result[1]
+            return (None, None)
         except Exception as e:
             return None, None 

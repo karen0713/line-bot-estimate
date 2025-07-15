@@ -13,6 +13,7 @@ import os
 import json
 from user_management import UserManager
 from stripe_payment import StripePayment
+import sqlite3
 
 app = Flask(__name__)
 
@@ -25,8 +26,13 @@ SCOPES = [
     'https://www.googleapis.com/auth/spreadsheets',
     'https://www.googleapis.com/auth/drive'
 ]
-SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID', '1GkJ8OYwIIMnYqxcwVBNArvk2byFL3UlGHgkyTiV6QU0')
-SHEET_NAME = os.environ.get('SHEET_NAME', '比較見積書 ロング')
+# 共有スプレッドシートの設定
+SHARED_SPREADSHEET_ID = os.environ.get('SHARED_SPREADSHEET_ID', '1GkJ8OYwIIMnYqxcwVBNArvk2byFL3UlGHgkyTiV6QU0')
+DEFAULT_SHEET_NAME = os.environ.get('DEFAULT_SHEET_NAME', '比較見積書 ロング')
+
+# 従来の設定（後方互換性のため保持）
+SPREADSHEET_ID = os.environ.get('SPREADSHEET_ID', SHARED_SPREADSHEET_ID)
+SHEET_NAME = os.environ.get('SHEET_NAME', DEFAULT_SHEET_NAME)
 
 configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
@@ -58,6 +64,40 @@ PRODUCT_TEMPLATES = {
     "帽子": {"sizes": ["FREE", "L"], "prices": [800, 800]},
     "タオル": {"sizes": ["FREE"], "prices": [500]},
     "その他": {"sizes": ["FREE"], "prices": [1000]}
+}
+
+# --- SHEET_WRITE_CONFIGを4シート名ごとに分岐 ---
+SHEET_WRITE_CONFIG = {
+    "比較見積書 ロング": {
+        "company": "A2:H3",
+        "date": "M2:Q2",
+        "product": {
+            "現状": {"name": ["A", "B"], "price": "C", "quantity": "D", "cycle": "G", "row_start": 19, "row_end": 36},
+            "当社": {"name": ["I", "J"], "price": "K", "quantity": "L", "cycle": "O", "row_start": 19, "row_end": 36}
+        }
+    },
+    "比較御見積書　ショート": {
+        "company": "A2:H3",
+        "date": "M2:Q2",
+        "product": {
+            "現状": {"name": ["A", "B"], "price": "C", "quantity": "D", "cycle": "G", "row_start": 19, "row_end": 28},
+            "当社": {"name": ["I", "J"], "price": "K", "quantity": "L", "cycle": "O", "row_start": 19, "row_end": 28}
+        }
+    },
+    "新規見積書　ショート": {
+        "company": "B5:G7",
+        "date": "I2:J3",
+        "product": {
+            "default": {"name": ["B", "C", "D"], "cycle": "E", "quantity": "F", "price": "G", "row_start": 24, "row_end": 30}
+        }
+    },
+    "新規見積書　ロング": {
+        "company": "B5:G7",
+        "date": "I2:J3",
+        "product": {
+            "default": {"name": ["B", "C"], "place": "D", "cycle": "E", "quantity": "F", "price": "G", "row_start": 27, "row_end": 48}
+        }
+    }
 }
 
 def setup_google_sheets():
@@ -95,7 +135,8 @@ def parse_estimate_data(text):
             continue
         key = key.strip()
         value = value.strip()
-        if key in ['社名', '会社名', '商品名', 'サイズ', '単価', '数量', '日付']:
+        # 抽出対象の項目を拡張
+        if key in ['社名', '会社名', '商品名', '単価', '数量', '日付', 'サイクル', '設置場所']:
             data[key] = value
     # 社名と会社名を統一
     if '会社名' in data and '社名' not in data:
@@ -119,7 +160,7 @@ def extract_spreadsheet_id(url):
     return match.group(1) if match else None
 
 def write_to_spreadsheet(data, user_id=None):
-    """スプレッドシートにデータを書き込み（顧客別対応）"""
+    """スプレッドシートにデータを書き込み（シート名・項目別対応）"""
     try:
         print(f"開始: スプレッドシート書き込み処理")
         
@@ -127,11 +168,17 @@ def write_to_spreadsheet(data, user_id=None):
         if user_id and user_manager:
             spreadsheet_id, sheet_name = user_manager.get_user_spreadsheet(user_id)
             if not spreadsheet_id:
-                spreadsheet_id = SPREADSHEET_ID  # デフォルト
-                sheet_name = SHEET_NAME
+                # ユーザーがスプレッドシートを登録していない場合は共有スプレッドシートを使用
+                spreadsheet_id = SHARED_SPREADSHEET_ID
+                sheet_name = DEFAULT_SHEET_NAME
+                print(f"ユーザーがスプレッドシートを登録していないため、共有スプレッドシートを使用: {spreadsheet_id}")
         else:
-            spreadsheet_id = SPREADSHEET_ID
-            sheet_name = SHEET_NAME
+            spreadsheet_id = SHARED_SPREADSHEET_ID
+            sheet_name = DEFAULT_SHEET_NAME
+        
+        # --- シート名を正規化 ---
+        # normalize_sheet_nameを削除
+        # sheet_name = normalize_sheet_name(sheet_name)
         
         client = setup_google_sheets()
         if not client:
@@ -142,62 +189,129 @@ def write_to_spreadsheet(data, user_id=None):
         sheet = client.open_by_key(spreadsheet_id).worksheet(sheet_name)
         print(f"成功: シート '{sheet_name}' を開きました")
         
-        # 現在の日付を取得
-        current_date = datetime.now().strftime('%Y/%m/%d')
+        # シート名に対応する設定を取得
+        sheet_config = SHEET_WRITE_CONFIG.get(sheet_name)
+        if not sheet_config:
+            print(f"警告: シート '{sheet_name}' の設定が見つかりません。デフォルト設定を使用します。")
+            # デフォルト設定（比較見積書 ロング）
+            sheet_config = SHEET_WRITE_CONFIG["比較御見積書　ショート"]
         
-        # 見積書フォーマットに合わせて、A-D列が36行目まで埋まったらI-L列に書き込み
-        # A列: 商品名, B列: サイズ, C列: 単価, D列: 数量
-        # I列: 商品名, J列: サイズ, K列: 単価, L列: 数量
+        print(f"SHEET_WRITE_CONFIG.keys(): {list(SHEET_WRITE_CONFIG.keys())}")
+        print(f"sheet_name: '{sheet_name}'")
+
+        # 商品名から「現状」「当社」などの語尾を除去し、商品タイプを判定
+        product_name = data.get('商品名', '')
+        product_type = "default"  # デフォルト
+        if product_name:
+            import re
+            m = re.match(r"^(.*?)[\s　]*(現状|当社)$", product_name)
+            if m:
+                product_type = m.group(2)
+                data['商品名'] = m.group(1)
+            # elseはdefaultのまま
+
+        # 商品設定を取得
+        product_config = sheet_config.get('product', {}).get(product_type)
+        if not product_config:
+            # デフォルト設定を使用
+            available_configs = list(sheet_config.get('product', {}).values())
+            if available_configs:
+                product_config = available_configs[0]
+            else:
+                print(f"エラー: シート '{sheet_name}' に商品設定が見つかりません")
+                return False, f"シート '{sheet_name}' の設定エラー"
+        
+        print(f"商品タイプ: {product_type}")
+        print(f"商品設定: {product_config}")
+        print(f"利用可能な設定: {list(sheet_config.get('product', {}).keys())}")
         
         # 既存データの行数を確認
         existing_data = sheet.get_all_values()
         print(f"既存データ行数: {len(existing_data)}")
         
-        # A-D列の使用状況を確認（19行目から36行目まで）
-        ad_used_rows = 0
-        for row in range(18, min(36, len(existing_data))):  # 19行目から36行目まで
-            if any(existing_data[row][:4]):  # A-D列のいずれかにデータがあるかチェック
-                ad_used_rows += 1
+        # 使用済み行数を確認（商品タイプに応じた列のみ）
+        row_start = product_config.get('row_start', 19)
+        row_end = product_config.get('row_end', 36)
+        used_rows = 0
         
-        print(f"A-D列使用済み行数: {ad_used_rows}")
+        # 商品タイプに応じた列のみをチェック
+        check_columns = []
+        for col_key in ['name', 'option', 'price', 'quantity', 'cycle', 'place']:
+            if col_key in product_config:
+                col_value = product_config[col_key]
+                if isinstance(col_value, list):
+                    check_columns.extend(col_value)
+                else:
+                    check_columns.append(col_value)
         
-        # A-D列が36行目まで埋まっているかチェック
-        if ad_used_rows >= 18:  # 19行目から36行目まで = 18行
-            # I-L列に書き込み（19行目から開始）
-            next_row = 19
-            range_name = f"I{next_row}:L{next_row}"
-            print(f"A-D列が36行目まで埋まっているため、I-L列の{next_row}行目に書き込み")
+        print(f"チェック対象列: {check_columns}")
+        
+        for row in range(row_start - 1, min(row_end, len(existing_data))):
+            # 該当する列にデータがあるかチェック
+            has_data = False
+            for col_letter in check_columns:
+                col_index = ord(col_letter) - ord('A')
+                if col_index < len(existing_data[row]) and existing_data[row][col_index]:
+                    has_data = True
+                    break
+            if has_data:
+                used_rows += 1
+        
+        print(f"使用済み行数: {used_rows} (行範囲: {row_start}-{row_end})")
+        print(f"チェック対象列: {check_columns}")
+        
+        # 次の書き込み行を決定
+        next_row = row_start + used_rows
+        if next_row > row_end:
+            print(f"警告: 行数上限 {row_end} を超えています。{row_end}行目に書き込みます。")
+            next_row = row_end
+        
+        print(f"書き込み行: {next_row}")
+        
+        # 商品名（複数列対応）
+        if data.get('商品名', '') and 'name' in product_config:
+            name_cols = product_config['name']
+            if isinstance(name_cols, list):
+                for col in name_cols:
+                    sheet.update(values=[[data.get('商品名', '')]], range_name=f"{col}{next_row}")
+                    print(f"{col}{next_row} に {data.get('商品名', '')} を書き込みます")
         else:
-            # A-D列に書き込み（19行目から順番に）
-            next_row = 19 + ad_used_rows
-            range_name = f"A{next_row}:D{next_row}"
-            print(f"A-D列の{next_row}行目に書き込み")
+                sheet.update(values=[[data.get('商品名', '')]], range_name=f"{name_cols}{next_row}")
+                print(f"{name_cols}{next_row} に {data.get('商品名', '')} を書き込みます")
+
+        # サイクル（サイクル列が指定されている場合のみ）
+        if data.get('サイクル', '') and 'cycle' in product_config:
+            cycle_col = product_config['cycle']
+            sheet.update(values=[[data.get('サイクル', '')]], range_name=f"{cycle_col}{next_row}")
+            print(f"{cycle_col}{next_row} に {data.get('サイクル', '')} を書き込みます")
         
-        print(f"書き込み行: {next_row} ({range_name})")
+        # 数量
+        if data.get('数量', '') and 'quantity' in product_config:
+            quantity_col = product_config['quantity']
+            sheet.update(values=[[data.get('数量', '')]], range_name=f"{quantity_col}{next_row}")
+            print(f"{quantity_col}{next_row} に {data.get('数量', '')} を書き込みます")
+
+        # 単価
+        if data.get('単価', '') and 'price' in product_config:
+            price_col = product_config['price']
+            sheet.update(values=[[data.get('単価', '')]], range_name=f"{price_col}{next_row}")
+            print(f"{price_col}{next_row} に {data.get('単価', '')} を書き込みます")
         
-        # 書き込むデータを準備
-        write_data = [[
-            data.get('商品名', ''),
-            data.get('サイズ', ''),
-            data.get('単価', ''),
-            data.get('数量', '')
-        ]]
+        # 設置場所（設置場所列が指定されている場合のみ）
+        if data.get('設置場所', '') and 'place' in product_config:
+            place_col = product_config['place']
+            sheet.update(values=[[data.get('設置場所', '')]], range_name=f"{place_col}{next_row}")
+            print(f"{place_col}{next_row} に {data.get('設置場所', '')} を書き込みます")
         
-        print(f"書き込みデータ: {write_data}")
-        print(f"書き込み範囲: {range_name}")
-        
-        # データを書き込み
-        sheet.update(range_name, write_data)
-        
-        print(f"成功: データを{next_row}行目の{range_name}に書き込みました")
-        return True, f"データを{next_row}行目の{range_name}に正常に書き込みました"
+        print(f"成功: データを{next_row}行目に書き込みました")
+        return True, f"データを{next_row}行目に正常に書き込みました"
         
     except Exception as e:
         print(f"Spreadsheet write error: {e}")
         return False, f"書き込みエラー: {str(e)}"
 
 def update_company_info(data, user_id=None):
-    """会社名と日付を更新"""
+    """会社名と日付を更新（シート名別対応）"""
     try:
         print(f"開始: 会社情報更新処理")
         
@@ -205,11 +319,17 @@ def update_company_info(data, user_id=None):
         if user_id and user_manager:
             spreadsheet_id, sheet_name = user_manager.get_user_spreadsheet(user_id)
             if not spreadsheet_id:
-                spreadsheet_id = SPREADSHEET_ID  # デフォルト
-                sheet_name = SHEET_NAME
+                # ユーザーがスプレッドシートを登録していない場合は共有スプレッドシートを使用
+                spreadsheet_id = SHARED_SPREADSHEET_ID
+                sheet_name = DEFAULT_SHEET_NAME
+                print(f"ユーザーがスプレッドシートを登録していないため、共有スプレッドシートを使用: {spreadsheet_id}")
         else:
-            spreadsheet_id = SPREADSHEET_ID
-            sheet_name = SHEET_NAME
+            spreadsheet_id = SHARED_SPREADSHEET_ID
+            sheet_name = DEFAULT_SHEET_NAME
+        
+        # --- シート名を正規化 ---
+        # normalize_sheet_nameを削除
+        # sheet_name = normalize_sheet_name(sheet_name)
         
         client = setup_google_sheets()
         if not client:
@@ -217,26 +337,70 @@ def update_company_info(data, user_id=None):
             return False, "Google Sheets接続エラー"
         
         sheet = client.open_by_key(spreadsheet_id).worksheet(sheet_name)
+        
+        # シート名に対応する設定を取得
+        sheet_config = SHEET_WRITE_CONFIG.get(sheet_name)
+        if not sheet_config:
+            print(f"警告: シート '{sheet_name}' の設定が見つかりません。デフォルト設定を使用します。")
+            sheet_config = SHEET_WRITE_CONFIG["比較御見積書　ショート"]
+        
         updates = []
         
-        # 会社名を更新（A2:H3セル）
+        # 会社名を更新
         if '社名' in data:
+            company_range = sheet_config.get('company', 'A2:H3')
+            # 範囲から列数を計算
+            import re
+            range_match = re.match(r'([A-Z]+)(\d+):([A-Z]+)(\d+)', company_range)
+            if range_match:
+                start_col = range_match.group(1)
+                end_col = range_match.group(3)
+                # 列数を計算（A=1, B=2, ...）
+                start_col_num = sum((ord(c) - ord('A') + 1) * (26 ** i) for i, c in enumerate(reversed(start_col)))
+                end_col_num = sum((ord(c) - ord('A') + 1) * (26 ** i) for i, c in enumerate(reversed(end_col)))
+                col_count = end_col_num - start_col_num + 1
+            else:
+                col_count = 8  # デフォルト
+            
+            # 会社名の書き込み形式を決定
             company_values = [
-                [data['社名']] + [''] * 7,
-                [''] * 8
+                [data['社名']] + [''] * (col_count - 1),
+                [''] * col_count
             ]
-            sheet.update('A2:H3', company_values)
+            sheet.update(values=company_values, range_name=company_range)
             updates.append(f"会社名: {data['社名']}")
-            print(f"会社名を更新: {data['社名']}")
+            print(f"会社名を更新: {data['社名']} (範囲: {company_range}, 列数: {col_count})")
         
-        # 日付を更新（M2:Q2セル）
+        # 日付を更新
         if '日付' in data:
+            date_range = sheet_config.get('date', 'M2:Q2')
+            # 範囲から列数を計算
+            range_match = re.match(r'([A-Z]+)(\d+):([A-Z]+)(\d+)', date_range)
+            if range_match:
+                start_col = range_match.group(1)
+                end_col = range_match.group(3)
+                # 列数を計算（A=1, B=2, ...）
+                def col_to_num(col):
+                    result = 0
+                    for i, c in enumerate(reversed(col)):
+                        result += (ord(c) - ord('A') + 1) * (26 ** i)
+                    return result
+                
+                start_col_num = col_to_num(start_col)
+                end_col_num = col_to_num(end_col)
+                col_count = end_col_num - start_col_num + 1
+                print(f"日付範囲計算: {start_col}({start_col_num}) から {end_col}({end_col_num}) = {col_count}列")
+            else:
+                col_count = 5  # デフォルト
+                print(f"日付範囲の正規表現マッチ失敗: {date_range}, デフォルト列数: {col_count}")
+            
+            # 日付の書き込み形式を決定
             date_values = [
-                [data['日付']] + [''] * 4
+                [data['日付']] + [''] * (col_count - 1)
             ]
-            sheet.update('M2:Q2', date_values)
+            sheet.update(values=date_values, range_name=date_range)
             updates.append(f"日付: {data['日付']}")
-            print(f"日付を更新: {data['日付']}")
+            print(f"日付を更新: {data['日付']} (範囲: {date_range}, 列数: {col_count})")
         
         if updates:
             return True, f"更新完了: {', '.join(updates)}"
@@ -522,6 +686,78 @@ def create_plan_selection():
         }
     }
 
+def create_sheet_selection():
+    """シート選択のFlex Messageを作成"""
+    return {
+        "type": "bubble",
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "シートを選択",
+                    "weight": "bold",
+                    "size": "lg",
+                    "align": "center"
+                },
+                {
+                    "type": "text",
+                    "text": "使用するシートを選択してください",
+                    "margin": "md",
+                    "align": "center",
+                    "color": "#666666"
+                }
+            ]
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "button",
+                    "action": {
+                        "type": "postback",
+                        "label": "比較見積書 ロング",
+                        "data": "action=select_sheet&sheet=比較見積書 ロング"
+                    },
+                    "style": "primary",
+                    "margin": "sm"
+                },
+                {
+                    "type": "button",
+                    "action": {
+                        "type": "postback",
+                        "label": "比較御見積書　ショート",
+                        "data": "action=select_sheet&sheet=比較御見積書　ショート"
+                    },
+                    "style": "secondary",
+                    "margin": "sm"
+                },
+                {
+                    "type": "button",
+                    "action": {
+                        "type": "postback",
+                        "label": "新規見積書　ショート",
+                        "data": "action=select_sheet&sheet=新規見積書　ショート"
+                    },
+                    "style": "secondary",
+                    "margin": "sm"
+                },
+                {
+                    "type": "button",
+                    "action": {
+                        "type": "postback",
+                        "label": "新規見積書　ロング",
+                        "data": "action=select_sheet&sheet=新規見積書　ロング"
+                    },
+                    "style": "secondary",
+                    "margin": "sm"
+                }
+            ]
+        }
+    }
+
 def create_rich_menu():
     """リッチメニューを作成"""
     try:
@@ -544,12 +780,16 @@ def create_rich_menu():
                 "chatBarText": "メニュー",
                 "areas": [
                     {
-                        "bounds": {"x": 0, "y": 0, "width": 600, "height": 405},
+                        "bounds": {"x": 0, "y": 0, "width": 400, "height": 405},
                         "action": {"type": "message", "label": "商品を追加", "text": "商品を追加"}
                     },
                     {
-                        "bounds": {"x": 600, "y": 0, "width": 600, "height": 405},
+                        "bounds": {"x": 400, "y": 0, "width": 400, "height": 405},
                         "action": {"type": "message", "label": "スプレッドシート登録", "text": "スプレッドシート登録"}
+                    },
+                    {
+                        "bounds": {"x": 800, "y": 0, "width": 400, "height": 405},
+                        "action": {"type": "postback", "label": "シート選択", "data": "action=show_sheet_selection"}
                     }
                 ]
             }
@@ -598,6 +838,7 @@ def delete_rich_menu_endpoint():
 
 @app.route("/callback", methods=['POST'])
 def callback():
+    print("Webhook受信")
     signature = request.headers['X-Line-Signature']
     body = request.get_data(as_text=True)
     print(f"Received webhook: {body[:100]}...")  # ログ追加
@@ -632,11 +873,31 @@ def handle_message(event):
 
     # リッチメニューやテキストコマンドに応じた返答
     if user_text in ["商品を追加"]:
-        reply = "カスタム商品を追加するには、以下の形式で入力してください：\n\n商品名:○○○○\nサイズ:○○\n単価:○○○○\n数量:○○\n\n例：\n商品名:オリジナルTシャツ\nサイズ:L\n単価:2000\n数量:5"
-        send_text_message(event.reply_token, reply)
+        # ユーザーの状態を商品追加に設定
+        set_user_state(user_id, 'product_add')
+        # シート選択画面を表示
+        flex_message = FlexMessage(
+            alt_text="シート選択",
+            contents=FlexContainer.from_dict(create_sheet_selection())
+        )
+        send_flex_message(event.reply_token, flex_message)
+        return
+    elif user_text in ["スプレッドシート登録"]:
+        # ユーザーの状態をスプレッドシート登録に設定
+        set_user_state(user_id, 'spreadsheet_register')
+        # シート選択画面を表示
+        flex_message = FlexMessage(
+            alt_text="シート選択",
+            contents=FlexContainer.from_dict(create_sheet_selection())
+        )
+        send_flex_message(event.reply_token, flex_message)
         return
     elif user_text in ["会社情報を更新"]:
-        reply = "会社情報を更新するには、以下の形式で入力してください：\n\n会社名:○○株式会社\n日付:2024/01/15\n\nまたは、\n会社名:○○株式会社 日付:2024/01/15"
+        reply = "会社情報を更新するには、以下の形式で入力してください：\n\n"
+        reply += "会社名:○○株式会社\n"
+        reply += "日付:2024/01/15\n\n"
+        reply += "または、\n"
+        reply += "会社名:○○株式会社 日付:2024/01/15"
         send_text_message(event.reply_token, reply)
         return
     elif user_text in ["利用状況確認"]:
@@ -654,26 +915,31 @@ def handle_message(event):
         send_flex_message(event.reply_token, flex_message)
         return
     elif user_text in ["見積書を確認"]:
-        reply = "現在の見積書を確認するには、Googleスプレッドシートを直接確認してください。\n\nスプレッドシートURL:\nhttps://docs.google.com/spreadsheets/d/1GkJ8OYwIIMnYqxcwVBNArvk2byFL3UlGHgkyTiV6QU0"
+        reply = "現在の見積書を確認するには、Googleスプレッドシートを直接確認してください。\n\n"
+        reply += "📊 共有スプレッドシートURL:\n"
+        reply += f"https://docs.google.com/spreadsheets/d/{SHARED_SPREADSHEET_ID}\n\n"
+        reply += "💡 独自のスプレッドシートを登録している場合は、そのスプレッドシートを確認してください。"
         send_text_message(event.reply_token, reply)
         return
 
     # スプレッドシート管理機能
-    elif user_text.startswith("スプレッドシート登録:"):
-        # スプレッドシートURLからIDを抽出
-        url_part = user_text.replace("スプレッドシート登録:", "").strip()
-        
-        # URLとシート名を分離（シート名が指定されている場合）
-        if "シート名:" in url_part:
-            url, sheet_name = url_part.split("シート名:", 1)
-            url = url.strip()
-            sheet_name = sheet_name.strip()
-        else:
-            url = url_part
-            sheet_name = None
-        
-        spreadsheet_id = extract_spreadsheet_id(url)
-        
+    print(f"user_text: {user_text}")
+    if re.search(r"スプレッドシート[\s　]*登録[：:]", user_text):
+        print("スプレッドシート登録コマンドを検出")
+        # 2行・1行両対応: 行ごとにURLとシート名を抽出
+        url = None
+        sheet_name = None
+        for line in user_text.splitlines():
+            if not url:
+                m_url = re.search(r"https?://[\w\-./?%&=:#]+", line)
+                if m_url:
+                    url = m_url.group(0).strip()
+            if not sheet_name:
+                m_sheet = re.search(r"シート名[：:]?[\s　]*(.+)", line)
+                if m_sheet:
+                    sheet_name = m_sheet.group(1).strip()
+        print(f"url: {url}, sheet_name: {sheet_name}")
+        spreadsheet_id = extract_spreadsheet_id(url) if url else None
         if spreadsheet_id:
             # シート名が指定されていない場合は実際のシート名を取得
             if not sheet_name:
@@ -686,11 +952,10 @@ def handle_message(event):
                         sheet_name = first_sheet.title
                         print(f"取得したシート名: {sheet_name}")
                     else:
-                        sheet_name = "比較見積書 ロング"  # フォールバック
+                        sheet_name = "比較御見積書　ショート"  # フォールバック
                 except Exception as e:
                     print(f"シート名取得エラー: {e}")
-                    sheet_name = "比較見積書 ロング"  # フォールバック
-            
+                    sheet_name = "比較御見積書　ショート"  # フォールバック
             success, message = user_manager.set_user_spreadsheet(user_id, spreadsheet_id, sheet_name)
             if success:
                 reply = f"✅ スプレッドシートを登録しました！\n\n"
@@ -705,7 +970,17 @@ def handle_message(event):
             reply += "正しい形式：\n"
             reply += "スプレッドシート登録:https://docs.google.com/spreadsheets/d/xxxxxxx\n\n"
             reply += "または、シート名を指定：\n"
-            reply += "スプレッドシート登録:https://docs.google.com/spreadsheets/d/xxxxxxx シート名:見積書"
+            reply += "スプレッドシート登録:https://docs.google.com/spreadsheets/d/xxxxxxx シート名:見積書\n\n"
+            reply += "⚠️ 重要：\n"
+            reply += "• 新しいスプレッドシートを作成してください\n"
+            reply += "• スプレッドシートは共有設定で「編集者」に設定してください\n"
+            reply += "• シート名を指定しない場合は、最初のシートが使用されます\n\n"
+            reply += "📋 手順：\n"
+            reply += "1. Googleスプレッドシートを新規作成\n"
+            reply += "2. シート名を変更（例：「見積書」）\n"
+            reply += "3. 共有設定で「編集者」に設定\n"
+            reply += "4. URLをコピーして以下の形式で送信：\n"
+            reply += "スプレッドシート登録:【URL】 シート名:【シート名】"
         send_text_message(event.reply_token, reply)
         return
 
@@ -720,9 +995,12 @@ def handle_message(event):
                 reply += f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}\n\n"
                 reply += f"シート名: {sheet_name}"
             else:
-                reply = "❌ スプレッドシートが登録されていません。\n\n"
-                reply += "登録方法：\n"
-                reply += "スプレッドシート登録:https://docs.google.com/spreadsheets/d/..."
+                reply = f"📊 共有スプレッドシートを使用中\n\n"
+                reply += f"スプレッドシートURL:\n"
+                reply += f"https://docs.google.com/spreadsheets/d/{SHARED_SPREADSHEET_ID}\n\n"
+                reply += f"シート名: {DEFAULT_SHEET_NAME}\n\n"
+                reply += "💡 独自のスプレッドシートを使用したい場合は、以下の形式で登録してください：\n"
+                reply += "スプレッドシート登録:https://docs.google.com/spreadsheets/d/xxxxxxx シート名:見積書"
         else:
             print("user_manager is None")
             reply = "❌ システムエラー: ユーザー管理システムが利用できません。"
@@ -730,23 +1008,14 @@ def handle_message(event):
         return
 
     elif user_text == "スプレッドシート登録":
-        reply = "📝 スプレッドシートを登録してください\n\n"
-        reply += "以下の形式でGoogleスプレッドシートのURLを送信してください：\n\n"
-        reply += "📊 基本形式：\n"
-        reply += "スプレッドシート登録:https://docs.google.com/spreadsheets/d/xxxxxxx\n\n"
-        reply += "📋 シート名を指定する場合：\n"
-        reply += "スプレッドシート登録:https://docs.google.com/spreadsheets/d/xxxxxxx シート名:見積書\n\n"
-        reply += "⚠️ 重要：\n"
-        reply += "• 新しいスプレッドシートを作成してください\n"
-        reply += "• スプレッドシートは共有設定で「編集者」に設定してください\n"
-        reply += "• シート名を指定しない場合は、最初のシートが使用されます\n\n"
-        reply += "📋 手順：\n"
-        reply += "1. Googleスプレッドシートを新規作成\n"
-        reply += "2. シート名を変更（例：「見積書」）\n"
-        reply += "3. 共有設定で「編集者」に設定\n"
-        reply += "4. URLをコピーして以下の形式で送信：\n"
-        reply += "スプレッドシート登録:【URL】 シート名:【シート名】"
-        send_text_message(event.reply_token, reply)
+        # ユーザーの状態をスプレッドシート登録に設定
+        set_user_state(user_id, 'spreadsheet_register')
+        # シート選択画面を表示
+        flex_message = FlexMessage(
+            alt_text="シート選択",
+            contents=FlexContainer.from_dict(create_sheet_selection())
+        )
+        send_flex_message(event.reply_token, flex_message)
         return
 
     # それ以外は従来通りの案内＋データ解析・登録
@@ -804,20 +1073,11 @@ def handle_message(event):
             reply += "例: 会社名:ABC株式会社 日付:2024/01/15\n\n"
             reply += "【商品データ登録】\n"
             reply += "例: 社名:ABC株式会社 商品名:商品A サイズ:M 単価:1000 数量:5\n\n"
-            reply += "または「メニュー」と入力してボタン選択式で入力してください。"
-        send_text_message(event.reply_token, reply)
-        return
-
-    # 何も該当しない場合のみ案内
-    reply = "見積書作成システムへようこそ！\n\n"
-    reply += "以下の方法で入力できます：\n\n"
-    reply += "1️⃣ **ボタン選択式（推奨）**\n"
-    reply += "「メニュー」と入力してボタンで選択\n\n"
-    reply += "2️⃣ **テキスト入力**\n"
-    reply += "【会社情報更新】\n"
-    reply += "例: 会社名:ABC株式会社 日付:2024/01/15\n\n"
-    reply += "【商品データ登録】\n"
-    reply += "例: 社名:ABC株式会社 商品名:商品A サイズ:M 単価:1000 数量:5"
+            reply += "【追加項目（シートによって利用可能）】\n"
+            reply += "サイクル:月1回 設置場所:1階\n\n"
+            reply += "【語尾指定（比較見積書系のみ）】\n"
+            reply += "商品名:マット 現状  ← 現状用の列に書き込み\n"
+            reply += "商品名:マット 当社  ← 当社用の列に書き込み"
     send_text_message(event.reply_token, reply)
 
 @handler.add(PostbackEvent)
@@ -847,10 +1107,17 @@ def handle_postback(event):
     elif action == 'custom_product':
         # カスタム商品名入力の案内
         reply = "カスタム商品を追加するには、以下の形式で入力してください：\n\n"
+        reply += "【基本項目】\n"
         reply += "商品名:○○○○\n"
         reply += "サイズ:○○\n"
         reply += "単価:○○○○\n"
         reply += "数量:○○\n\n"
+        reply += "【追加項目（シートによって利用可能）】\n"
+        reply += "サイクル:○○\n"
+        reply += "設置場所:○○\n\n"
+        reply += "【語尾指定（比較見積書系のみ）】\n"
+        reply += "商品名:マット 現状  ← 現状用の列に書き込み\n"
+        reply += "商品名:マット 当社  ← 当社用の列に書き込み\n\n"
         reply += "例：\n"
         reply += "商品名:オリジナルTシャツ\n"
         reply += "サイズ:L\n"
@@ -951,9 +1218,11 @@ def handle_postback(event):
     elif action == 'view_estimate':
         # 見積書確認の案内
         reply = "現在の見積書を確認するには、Googleスプレッドシートを直接確認してください。\n\n"
-        reply += "スプレッドシートURL:\n"
-        reply += "https://docs.google.com/spreadsheets/d/1GkJ8OYwIIMnYqxcwVBNArvk2byFL3UlGHgkyTiV6QU0"
+        reply += "📊 共有スプレッドシートURL:\n"
+        reply += f"https://docs.google.com/spreadsheets/d/{SHARED_SPREADSHEET_ID}\n\n"
+        reply += "💡 独自のスプレッドシートを登録している場合は、そのスプレッドシートを確認してください。"
         send_text_message(event.reply_token, reply)
+        return
 
     elif action == 'upgrade_plan':
         # プラン選択画面を表示
@@ -966,6 +1235,97 @@ def handle_postback(event):
         else:
             reply = "申し訳ございません。決済システムが利用できません。"
             send_text_message(event.reply_token, reply)
+    
+    elif action == 'show_sheet_selection':
+        # シート選択画面を表示
+        flex_message = FlexMessage(
+            alt_text="シート選択",
+            contents=FlexContainer.from_dict(create_sheet_selection())
+        )
+        send_flex_message(event.reply_token, flex_message)
+    
+    elif action == 'select_sheet':
+        # シート選択時の処理
+        sheet_name = params.get('sheet', '')
+        print(f"Sheet selection: {sheet_name} for user {user_id}")
+        
+        # 現在のスプレッドシート情報を取得
+        if user_manager:
+            current_spreadsheet_id, current_sheet_name = user_manager.get_user_spreadsheet(user_id)
+            user_state = get_user_state(user_id)
+
+            if user_state == 'spreadsheet_register':
+                # スプレッドシート登録からの場合はシート変更のみ
+                if current_spreadsheet_id and current_sheet_name != sheet_name:
+                    success, message = user_manager.set_user_spreadsheet(user_id, current_spreadsheet_id, sheet_name)
+                    if not success:
+                        reply = f"❌ シート変更エラー: {message}\n\n"
+                        reply += "スプレッドシートの登録からやり直してください。"
+                        send_text_message(event.reply_token, reply)
+                        return
+                reply = f"✅ シートを変更しました！\n\n"
+                reply += f"📊 スプレッドシートURL:\n"
+                reply += f"https://docs.google.com/spreadsheets/d/{current_spreadsheet_id}\n\n"
+                reply += f"📋 変更前シート: {current_sheet_name}\n"
+                reply += f"📋 変更後シート: {sheet_name}\n\n"
+                reply += "これで商品データが選択したシートに反映されます。"
+                send_text_message(event.reply_token, reply)
+                return
+            elif user_state == 'product_add':
+                # 商品追加からの場合は入力フォーマットのみ表示
+                reply = f"📝 入力フォーマット（{sheet_name}）:\n"
+                if sheet_name == "比較見積書 ロング":
+                    reply += "商品名:○○○○\n"
+                    reply += "単価:○○○○\n"
+                    reply += "数量:○○\n"
+                    reply += "サイクル:○○\n"
+                    reply += "【語尾指定】\n"
+                    reply += "商品名:マット 現状  ← 現状用の列に書き込み\n"
+                    reply += "商品名:マット 当社  ← 当社用の列に書き込み\n"
+                    reply += "例：\n"
+                    reply += "商品名:マット 現状\n"
+                    reply += "単価:2000\n"
+                    reply += "数量:3\n"
+                    reply += "サイクル:週2"
+                elif sheet_name == "比較御見積書　ショート":
+                    reply += "商品名:○○○○\n"
+                    reply += "単価:○○○○\n"
+                    reply += "数量:○○\n"
+                    reply += "サイクル:○○\n"
+                    reply += "【語尾指定】\n"
+                    reply += "商品名:マット 現状  ← 現状用の列に書き込み\n"
+                    reply += "商品名:マット 当社  ← 当社用の列に書き込み\n"
+                    reply += "例：\n"
+                    reply += "商品名:マット 現状\n"
+                    reply += "単価:2000\n"
+                    reply += "数量:3\n"
+                    reply += "サイクル:週2"
+                elif sheet_name == "新規見積書　ショート":
+                    reply += "商品名:○○○○\n"
+                    reply += "単価:○○○○\n"
+                    reply += "数量:○○\n\n"
+                    reply += "例：\n"
+                    reply += "商品名:マット\n"
+                    reply += "単価:2000\n"
+                    reply += "数量:3"
+                else:
+                    reply += "商品名:○○○○\n"
+                    reply += "設置場所:○○\n"
+                    reply += "サイクル:○○\n"
+                    reply += "数量:○○\n"
+                    reply += "単価:○○○○\n\n"
+                    reply += "例：\n"
+                    reply += "商品名:マット\n"
+                    reply += "設置場所:玄関\n"
+                    reply += "サイクル:週2\n"
+                    reply += "数量:3\n"
+                    reply += "単価:2000"
+                send_text_message(event.reply_token, reply)
+                return
+        else:
+            reply = "❌ システムエラー: ユーザー管理システムが利用できません。"
+            send_text_message(event.reply_token, reply)
+            return
     
     elif action == 'select_plan':
         # プラン選択時の処理
@@ -1122,6 +1482,18 @@ def stripe_webhook():
             return f"Webhook error: {result}", 400
     
     return "Stripe payment system not available", 500
+
+# ユーザー状態管理
+user_states = {}  # user_id -> state (spreadsheet_register, product_add, etc.)
+
+def get_user_state(user_id):
+    """ユーザーの現在の状態を取得"""
+    return user_states.get(user_id, 'product_add')  # デフォルトは商品追加
+
+def set_user_state(user_id, state):
+    """ユーザーの状態を設定"""
+    user_states[user_id] = state
+    print(f"User {user_id} state set to: {state}")
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5002))
