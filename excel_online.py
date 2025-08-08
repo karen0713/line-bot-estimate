@@ -165,6 +165,35 @@ class ExcelOnlineManager:
         except Exception as e:
             return False, f"データ書き込みエラー: {e}"
     
+    def clear_range(self, file_id, sheet_name, range_address):
+        """指定された範囲のデータをクリア"""
+        try:
+            access_token = self.get_access_token()
+            if not access_token:
+                return False, "アクセストークンの取得に失敗しました"
+            
+            headers = {
+                'Authorization': f'Bearer {access_token}',
+                'Content-Type': 'application/json'
+            }
+            
+            # シート名をURLエンコード
+            import urllib.parse
+            encoded_sheet_name = urllib.parse.quote(sheet_name)
+            encoded_range = urllib.parse.quote(range_address)
+            
+            url = f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}/workbook/worksheets/{encoded_sheet_name}/range(address='{encoded_range}')/clear"
+            
+            response = requests.post(url, headers=headers)
+            
+            if response.status_code == 200:
+                return True, None
+            else:
+                return False, f"データクリアエラー: {response.status_code} - {response.text}"
+                
+        except Exception as e:
+            return False, f"データクリアエラー: {e}"
+    
     def update_company_info_excel(self, data, file_id, sheet_name):
         """会社情報をExcelファイルに更新"""
         try:

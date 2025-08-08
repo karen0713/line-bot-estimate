@@ -179,11 +179,28 @@ def parse_estimate_data(text):
     return data
 
 def extract_spreadsheet_id(url):
-    """GoogleスプレッドシートURLからIDを抽出"""
+    """GoogleスプレッドシートURLまたはMicrosoft Excel Online URLからIDを抽出"""
     import re
-    pattern = r'/spreadsheets/d/([a-zA-Z0-9-_]+)'
-    match = re.search(pattern, url)
-    return match.group(1) if match else None
+    
+    # Googleスプレッドシートのパターン
+    google_pattern = r'/spreadsheets/d/([a-zA-Z0-9-_]+)'
+    google_match = re.search(google_pattern, url)
+    if google_match:
+        return google_match.group(1)
+    
+    # Microsoft Excel Onlineのパターン
+    excel_pattern = r'/personal/[^/]+/Documents/([^/]+)'
+    excel_match = re.search(excel_pattern, url)
+    if excel_match:
+        return excel_match.group(1)
+    
+    # SharePointのパターン
+    sharepoint_pattern = r'/sites/[^/]+/Shared%20Documents/([^/]+)'
+    sharepoint_match = re.search(sharepoint_pattern, url)
+    if sharepoint_match:
+        return sharepoint_match.group(1)
+    
+    return None
 
 def write_to_spreadsheet(data, user_id=None):
     """スプレッドシートまたはExcel Onlineにデータを書き込み（シート名・項目別対応）"""
@@ -925,16 +942,28 @@ def create_rich_menu():
                 "chatBarText": "メニュー",
                 "areas": [
                     {
-                        "bounds": {"x": 0, "y": 0, "width": 400, "height": 405},
+                        "bounds": {"x": 0, "y": 0, "width": 200, "height": 405},
                         "action": {"type": "message", "label": "商品を追加", "text": "商品を追加"}
                     },
                     {
-                        "bounds": {"x": 400, "y": 0, "width": 400, "height": 405},
-                        "action": {"type": "message", "label": "スプレッドシート登録", "text": "スプレッドシート登録"}
+                        "bounds": {"x": 200, "y": 0, "width": 200, "height": 405},
+                        "action": {"type": "message", "label": "リセット", "text": "リセット"}
                     },
                     {
-                        "bounds": {"x": 800, "y": 0, "width": 400, "height": 405},
-                        "action": {"type": "postback", "label": "シート選択", "data": "action=show_sheet_selection"}
+                        "bounds": {"x": 400, "y": 0, "width": 200, "height": 405},
+                        "action": {"type": "message", "label": "会社情報を変更", "text": "会社情報を更新"}
+                    },
+                    {
+                        "bounds": {"x": 600, "y": 0, "width": 200, "height": 405},
+                        "action": {"type": "message", "label": "利用状況確認", "text": "利用状況確認"}
+                    },
+                    {
+                        "bounds": {"x": 800, "y": 0, "width": 200, "height": 405},
+                        "action": {"type": "message", "label": "見積書を確認", "text": "見積書を確認"}
+                    },
+                    {
+                        "bounds": {"x": 1000, "y": 0, "width": 200, "height": 405},
+                        "action": {"type": "message", "label": "スプレッドシート登録", "text": "スプレッドシート登録"}
                     }
                 ]
             }
@@ -1109,12 +1138,26 @@ def handle_message(event):
         reply += "💡 独自のスプレッドシートを登録している場合は、そのスプレッドシートを確認してください。"
         send_text_message(event.reply_token, reply)
         return
+    elif user_text in ["リセット"]:
+        # リセット機能
+        success, message = reset_spreadsheet_data(user_id)
+        if success:
+            reply = "✅ 商品データをリセットしました！\n\n"
+            reply += "📋 リセット内容:\n"
+            reply += "• 商品名、単価、数量、サイクルなどの商品データをクリア\n"
+            reply += "• 会社名と日付は保持されます\n\n"
+            reply += "💡 新しい商品を追加する場合は「商品を追加」と入力してください。"
+        else:
+            reply = f"❌ リセットエラー: {message}\n\n"
+            reply += "スプレッドシートの権限設定を確認してください。"
+        send_text_message(event.reply_token, reply)
+        return
 
     # スプレッドシート管理機能
     print(f"user_text: {user_text}")
     if re.search(r"スプレッドシート[\s　]*登録[：:]", user_text):
         print("スプレッドシート登録コマンドを検出")
-        # 2行・1行両対応: 行ごとにURLとシート名を抽出
+        # URLを抽出
         url = None
         sheet_name = None
         for line in user_text.splitlines():
@@ -1127,68 +1170,105 @@ def handle_message(event):
                 if m_sheet:
                     sheet_name = m_sheet.group(1).strip()
         print(f"url: {url}, sheet_name: {sheet_name}")
-        spreadsheet_id = extract_spreadsheet_id(url) if url else None
-        if spreadsheet_id:
-            # シート名が指定されていない場合は実際のシート名を取得
-            if not sheet_name:
-                try:
-                    client = setup_google_sheets()
-                    if client:
-                        spreadsheet = client.open_by_key(spreadsheet_id)
-                        # 最初のシートの名前を取得
-                        first_sheet = spreadsheet.get_worksheet(0)
-                        sheet_name = first_sheet.title
-                        print(f"取得したシート名: {sheet_name}")
-                    else:
-                        sheet_name = "比較御見積書　ショート"  # フォールバック
-                except Exception as e:
-                    print(f"シート名取得エラー: {e}")
-                    sheet_name = "比較御見積書　ショート"  # フォールバック
-            success, message = user_manager.set_user_spreadsheet(user_id, spreadsheet_id, sheet_name)
-            if success:
-                reply = f"✅ スプレッドシートを登録しました！\n\n"
-                reply += f"📊 スプレッドシートURL:\n"
-                reply += f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}\n\n"
-                reply += f"📋 シート名: {sheet_name}\n\n"
-                reply += "これで商品データがこのスプレッドシートに反映されます。"
+        
+        # URLの種類を判定
+        if is_excel_online_url(url):
+            # Microsoft Excel Onlineの場合
+            file_id, _ = extract_excel_online_info(url)
+            if file_id:
+                # シート名が指定されていない場合はデフォルトシート名を使用
+                if not sheet_name:
+                    sheet_name = DEFAULT_SHEET_NAME
+                    print(f"デフォルトシート名を使用: {sheet_name}")
+                
+                success, message = user_manager.set_user_excel_online(user_id, url, file_id, sheet_name)
+                if success:
+                    reply = f"✅ Microsoft Excel Onlineを登録しました！\n\n"
+                    reply += f"📊 Excel Online URL:\n"
+                    reply += f"{url}\n\n"
+                    reply += f"📋 シート名: {sheet_name}\n\n"
+                    reply += "💡 シート名を変更したい場合は、リッチメニューの「スプレッドシート登録」から変更できます。"
+                else:
+                    reply = f"❌ 登録エラー: {message}"
             else:
-                reply = f"❌ 登録エラー: {message}"
+                reply = "❌ Microsoft Excel Online URLが正しくありません。\n\n"
+                reply += "正しい形式：\n"
+                reply += "スプレッドシート登録:https://your-tenant.sharepoint.com/path/to/spreadsheet.xlsx\n\n"
+                reply += "または、シート名を指定：\n"
+                reply += "スプレッドシート登録:https://your-tenant.sharepoint.com/path/to/spreadsheet.xlsx シート名:比較見積書 ロング"
         else:
-            reply = "❌ スプレッドシートURLが正しくありません。\n\n"
-            reply += "正しい形式：\n"
-            reply += "スプレッドシート登録:https://docs.google.com/spreadsheets/d/xxxxxxx\n\n"
-            reply += "または、シート名を指定：\n"
-            reply += "スプレッドシート登録:https://docs.google.com/spreadsheets/d/xxxxxxx シート名:見積書\n\n"
-            reply += "⚠️ 重要：\n"
-            reply += "• 新しいスプレッドシートを作成してください\n"
-            reply += "• スプレッドシートは共有設定で「編集者」に設定してください\n"
-            reply += "• シート名を指定しない場合は、最初のシートが使用されます\n\n"
-            reply += "📋 手順：\n"
-            reply += "1. Googleスプレッドシートを新規作成\n"
-            reply += "2. シート名を変更（例：「見積書」）\n"
-            reply += "3. 共有設定で「編集者」に設定\n"
-            reply += "4. URLをコピーして以下の形式で送信：\n"
-            reply += "スプレッドシート登録:【URL】 シート名:【シート名】"
+            # Googleスプレッドシートの場合
+            spreadsheet_id = extract_spreadsheet_id(url) if url else None
+            if spreadsheet_id:
+                # シート名が指定されていない場合はデフォルトシート名を使用
+                if not sheet_name:
+                    sheet_name = DEFAULT_SHEET_NAME
+                    print(f"デフォルトシート名を使用: {sheet_name}")
+                
+                success, message = user_manager.set_user_spreadsheet(user_id, spreadsheet_id, sheet_name)
+                if success:
+                    reply = f"✅ Googleスプレッドシートを登録しました！\n\n"
+                    reply += f"📊 スプレッドシートURL:\n"
+                    reply += f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}\n\n"
+                    reply += f"📋 シート名: {sheet_name}\n\n"
+                    reply += "💡 シート名を変更したい場合は、リッチメニューの「スプレッドシート登録」から変更できます。"
+                else:
+                    reply = f"❌ 登録エラー: {message}"
+            else:
+                reply = "❌ スプレッドシートURLが正しくありません。\n\n"
+                reply += "【Googleスプレッドシート】\n"
+                reply += "正しい形式：\n"
+                reply += "スプレッドシート登録:https://docs.google.com/spreadsheets/d/xxxxxxx\n\n"
+                reply += "【Microsoft Excel Online】\n"
+                reply += "正しい形式：\n"
+                reply += "スプレッドシート登録:https://your-tenant.sharepoint.com/path/to/spreadsheet.xlsx\n\n"
+                reply += "⚠️ 重要：\n"
+                reply += "• 新しいスプレッドシートを作成してください\n"
+                reply += "• スプレッドシートは共有設定で「編集者」に設定してください\n"
+                reply += "• シート名を指定しない場合は、デフォルトシート名が使用されます\n\n"
+                reply += "📋 手順：\n"
+                reply += "1. スプレッドシートを新規作成（Google SheetsまたはExcel Online）\n"
+                reply += "2. 共有設定で「編集者」に設定\n"
+                reply += "3. URLをコピーして以下の形式で送信：\n"
+                reply += "スプレッドシート登録:【URL】\n\n"
+                reply += "💡 シート名の変更は後から「スプレッドシート登録」メニューから可能です。"
         send_text_message(event.reply_token, reply)
         return
 
     elif user_text == "スプレッドシート確認":
         print(f"スプレッドシート確認処理開始: user_id={user_id}")
         if user_manager:
+            # Googleスプレッドシートの情報を取得
             spreadsheet_id, sheet_name = user_manager.get_user_spreadsheet(user_id)
+            # Microsoft Excel Onlineの情報を取得
+            excel_url, excel_file_id, excel_sheet_name = user_manager.get_user_excel_online(user_id)
+            
             print(f"取得結果: spreadsheet_id={spreadsheet_id}, sheet_name={sheet_name}")
-            if spreadsheet_id:
-                reply = f"📊 あなたのスプレッドシート\n\n"
+            print(f"Excel Online結果: excel_url={excel_url}, excel_file_id={excel_file_id}, excel_sheet_name={excel_sheet_name}")
+            
+            if excel_url and excel_file_id:
+                # Microsoft Excel Onlineが登録されている場合
+                reply = f"📊 あなたのMicrosoft Excel Online\n\n"
+                reply += f"Excel Online URL:\n"
+                reply += f"{excel_url}\n\n"
+                reply += f"シート名: {excel_sheet_name}"
+            elif spreadsheet_id:
+                # Googleスプレッドシートが登録されている場合
+                reply = f"📊 あなたのGoogleスプレッドシート\n\n"
                 reply += f"スプレッドシートURL:\n"
                 reply += f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}\n\n"
                 reply += f"シート名: {sheet_name}"
             else:
+                # どちらも登録されていない場合
                 reply = f"📊 共有スプレッドシートを使用中\n\n"
                 reply += f"スプレッドシートURL:\n"
                 reply += f"https://docs.google.com/spreadsheets/d/{SHARED_SPREADSHEET_ID}\n\n"
                 reply += f"シート名: {DEFAULT_SHEET_NAME}\n\n"
                 reply += "💡 独自のスプレッドシートを使用したい場合は、以下の形式で登録してください：\n"
-                reply += "スプレッドシート登録:https://docs.google.com/spreadsheets/d/xxxxxxx シート名:見積書"
+                reply += "【Googleスプレッドシート】\n"
+                reply += "スプレッドシート登録:https://docs.google.com/spreadsheets/d/xxxxxxx\n\n"
+                reply += "【Microsoft Excel Online】\n"
+                reply += "スプレッドシート登録:https://your-tenant.sharepoint.com/path/to/spreadsheet.xlsx"
         else:
             print("user_manager is None")
             reply = "❌ システムエラー: ユーザー管理システムが利用できません。"
@@ -1550,23 +1630,44 @@ def handle_postback(event):
         # 現在のスプレッドシート情報を取得
         if user_manager:
             current_spreadsheet_id, current_sheet_name = user_manager.get_user_spreadsheet(user_id)
+            current_excel_url, current_excel_file_id, current_excel_sheet_name = user_manager.get_user_excel_online(user_id)
             user_state = get_user_state(user_id)
 
             if user_state == 'spreadsheet_register':
                 # スプレッドシート登録からの場合はシート変更のみ
-                if current_spreadsheet_id and current_sheet_name != sheet_name:
-                    success, message = user_manager.set_user_spreadsheet(user_id, current_spreadsheet_id, sheet_name)
-                    if not success:
-                        reply = f"❌ シート変更エラー: {message}\n\n"
-                        reply += "スプレッドシートの登録からやり直してください。"
-                        send_text_message(event.reply_token, reply)
-                        return
-                reply = f"✅ シートを変更しました！\n\n"
-                reply += f"📊 スプレッドシートURL:\n"
-                reply += f"https://docs.google.com/spreadsheets/d/{current_spreadsheet_id}\n\n"
-                reply += f"📋 変更前シート: {current_sheet_name}\n"
-                reply += f"📋 変更後シート: {sheet_name}\n\n"
-                reply += "これで商品データが選択したシートに反映されます。"
+                if current_excel_url and current_excel_file_id:
+                    # Microsoft Excel Onlineが登録されている場合
+                    if current_excel_sheet_name != sheet_name:
+                        success, message = user_manager.set_user_excel_online(user_id, current_excel_url, current_excel_file_id, sheet_name)
+                        if not success:
+                            reply = f"❌ シート変更エラー: {message}\n\n"
+                            reply += "スプレッドシートの登録からやり直してください。"
+                            send_text_message(event.reply_token, reply)
+                            return
+                    reply = f"✅ Microsoft Excel Onlineのシートを変更しました！\n\n"
+                    reply += f"📊 Excel Online URL:\n"
+                    reply += f"{current_excel_url}\n\n"
+                    reply += f"📋 変更前シート: {current_excel_sheet_name}\n"
+                    reply += f"📋 変更後シート: {sheet_name}\n\n"
+                    reply += "これで商品データが選択したシートに反映されます。"
+                elif current_spreadsheet_id:
+                    # Googleスプレッドシートが登録されている場合
+                    if current_sheet_name != sheet_name:
+                        success, message = user_manager.set_user_spreadsheet(user_id, current_spreadsheet_id, sheet_name)
+                        if not success:
+                            reply = f"❌ シート変更エラー: {message}\n\n"
+                            reply += "スプレッドシートの登録からやり直してください。"
+                            send_text_message(event.reply_token, reply)
+                            return
+                    reply = f"✅ Googleスプレッドシートのシートを変更しました！\n\n"
+                    reply += f"📊 スプレッドシートURL:\n"
+                    reply += f"https://docs.google.com/spreadsheets/d/{current_spreadsheet_id}\n\n"
+                    reply += f"📋 変更前シート: {current_sheet_name}\n"
+                    reply += f"📋 変更後シート: {sheet_name}\n\n"
+                    reply += "これで商品データが選択したシートに反映されます。"
+                else:
+                    reply = "❌ スプレッドシートが登録されていません。\n\n"
+                    reply += "まずスプレッドシートを登録してください。"
                 send_text_message(event.reply_token, reply)
                 return
             elif user_state == 'product_add':
@@ -1792,6 +1893,151 @@ def set_user_state(user_id, state):
     """ユーザーの状態を設定"""
     user_states[user_id] = state
     logger.info(f"User {user_id} state set to: {state}")
+
+def extract_excel_online_info(url):
+    """Microsoft Excel Online URLからファイルIDとシート名を抽出"""
+    import re
+    
+    # OneDrive Personalのパターン
+    onedrive_pattern = r'/personal/([^/]+)/Documents/([^/]+)'
+    onedrive_match = re.search(onedrive_pattern, url)
+    if onedrive_match:
+        user_id = onedrive_match.group(1)
+        file_name = onedrive_match.group(2)
+        return file_name, None  # シート名は後で指定
+    
+    # SharePointのパターン
+    sharepoint_pattern = r'/sites/([^/]+)/Shared%20Documents/([^/]+)'
+    sharepoint_match = re.search(sharepoint_pattern, url)
+    if sharepoint_match:
+        site_name = sharepoint_match.group(1)
+        file_name = sharepoint_match.group(2)
+        return file_name, None  # シート名は後で指定
+    
+    return None, None
+
+def is_excel_online_url(url):
+    """URLがMicrosoft Excel Onlineのものかどうかを判定"""
+    return 'office.com' in url or 'sharepoint.com' in url or 'onedrive.com' in url
+
+def reset_spreadsheet_data(user_id):
+    """スプレッドシートの商品データをリセット（会社名と日付以外を白紙に戻す）"""
+    try:
+        print(f"リセット処理開始: user_id={user_id}")
+        
+        # まずExcel Online設定をチェック
+        excel_online_enabled = False
+        excel_url = None
+        excel_file_id = None
+        excel_sheet_name = None
+        
+        if user_id and user_manager and excel_online_manager:
+            excel_url, excel_file_id, excel_sheet_name = user_manager.get_user_excel_online(user_id)
+            if excel_url and excel_file_id:
+                excel_online_enabled = True
+                print(f"Excel Online設定を検出: {excel_url}")
+        
+        # Excel Onlineが有効な場合はExcel Onlineをリセット
+        if excel_online_enabled:
+            return reset_excel_online_data(excel_file_id, excel_sheet_name, user_id)
+        
+        # 従来のGoogle Sheets処理
+        return reset_google_sheets_data(user_id)
+        
+    except Exception as e:
+        print(f"リセット処理エラー: {e}")
+        return False, f"リセット処理エラー: {e}"
+
+def reset_excel_online_data(file_id, sheet_name, user_id=None):
+    """Excel Onlineの商品データをリセット"""
+    try:
+        print(f"開始: Excel Onlineリセット処理")
+        print(f"file_id: {file_id}, sheet_name: {sheet_name}")
+        
+        if not excel_online_manager:
+            return False, "Excel Onlineシステムが利用できません"
+        
+        # シート名に応じてリセット範囲を決定
+        if sheet_name == "比較見積書 ロング":
+            # 商品名、単価、数量、サイクルをクリア（A19:D36）
+            clear_range = 'A19:D36'
+        elif sheet_name == "比較御見積書　ショート":
+            # 商品、単価、数量、サイクルをクリア（A19:D36）
+            clear_range = 'A19:D36'
+        elif sheet_name == "新規見積書　ショート":
+            # 商品、サイクル、数量、単価をクリア（A19:D36）
+            clear_range = 'A19:D36'
+        elif sheet_name == "新規見積書　ロング":
+            # 商品、設置場所、サイクル、数量、単価をクリア（A19:E36）
+            clear_range = 'A19:E36'
+        else:
+            # その他のシート（A19:G36）
+            clear_range = 'A19:G36'
+        
+        # 商品データの範囲をクリア
+        success, error = excel_online_manager.clear_range(file_id, sheet_name, clear_range)
+        if not success:
+            return False, f"商品データのクリアに失敗: {error}"
+        
+        print(f"範囲 {clear_range} をクリアしました")
+        return True, "Excel Onlineの商品データをリセットしました"
+        
+    except Exception as e:
+        print(f"Excel Onlineリセットエラー: {e}")
+        return False, f"Excel Onlineリセットエラー: {e}"
+
+def reset_google_sheets_data(user_id=None):
+    """Google Sheetsの商品データをリセット"""
+    try:
+        print(f"開始: Google Sheetsリセット処理")
+        
+        # 顧客のスプレッドシートIDを取得
+        if user_id and user_manager:
+            spreadsheet_id, sheet_name = user_manager.get_user_spreadsheet(user_id)
+            if not spreadsheet_id:
+                # ユーザーがスプレッドシートを登録していない場合は共有スプレッドシートを使用
+                spreadsheet_id = SHARED_SPREADSHEET_ID
+                sheet_name = DEFAULT_SHEET_NAME
+                print(f"ユーザーがスプレッドシートを登録していないため、共有スプレッドシートを使用: {spreadsheet_id}")
+        else:
+            spreadsheet_id = SHARED_SPREADSHEET_ID
+            sheet_name = DEFAULT_SHEET_NAME
+        
+        # Google Sheetsクライアントを設定
+        client = setup_google_sheets()
+        if not client:
+            return False, "Google Sheetsクライアントの設定に失敗しました"
+        
+        # スプレッドシートを開く
+        spreadsheet = client.open_by_key(spreadsheet_id)
+        worksheet = spreadsheet.worksheet(sheet_name)
+        
+        # シート名に応じてリセット範囲を決定
+        if sheet_name == "比較見積書 ロング":
+            # 商品名、単価、数量、サイクルをクリア（A19:D36）
+            clear_range = 'A19:D36'
+        elif sheet_name == "比較御見積書　ショート":
+            # 商品、単価、数量、サイクルをクリア（A19:D36）
+            clear_range = 'A19:D36'
+        elif sheet_name == "新規見積書　ショート":
+            # 商品、サイクル、数量、単価をクリア（A19:D36）
+            clear_range = 'A19:D36'
+        elif sheet_name == "新規見積書　ロング":
+            # 商品、設置場所、サイクル、数量、単価をクリア（A19:E36）
+            clear_range = 'A19:E36'
+        else:
+            # その他のシート（A19:G36）
+            clear_range = 'A19:G36'
+        
+        # 範囲をクリア
+        worksheet.batch_clear([clear_range])
+        print(f"範囲 {clear_range} をクリアしました")
+        
+        return True, "Google Sheetsの商品データをリセットしました"
+        
+    except Exception as e:
+        print(f"Google Sheetsリセットエラー: {e}")
+        return False, f"Google Sheetsリセットエラー: {e}"
 
 if __name__ == "__main__":
     logger.info("=== アプリケーション起動開始 ===")
