@@ -4,8 +4,15 @@ LINE_CHANNEL_SECRET=your_line_channel_secret
 
 # Google Sheets設定
 SPREADSHEET_ID=your_spreadsheet_id
+SHARED_SPREADSHEET_ID=your_shared_spreadsheet_id
 SHEET_NAME=your_sheet_name
+DEFAULT_SHEET_NAME=比較見積書 ロング
 GOOGLE_SHEETS_CREDENTIALS={"type": "service_account", ...}
+
+# Microsoft Graph API設定（Excel Online連携用）
+MS_CLIENT_ID=your_microsoft_client_id
+MS_CLIENT_SECRET=your_microsoft_client_secret
+MS_TENANT_ID=your_microsoft_tenant_id
 
 # Stripe設定
 STRIPE_SECRET_KEY=sk_test_...  # テスト用秘密鍵

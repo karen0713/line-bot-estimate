@@ -32,7 +32,10 @@ class UserManager:
                     last_reset_date DATE DEFAULT CURRENT_DATE,
                     is_active BOOLEAN DEFAULT 1,
                     spreadsheet_id TEXT,
-                    sheet_name TEXT DEFAULT '比較見積書 ロング'
+                    sheet_name TEXT DEFAULT '比較見積書 ロング',
+                    excel_online_url TEXT,
+                    excel_file_id TEXT,
+                    excel_sheet_name TEXT
                 )
             ''')
             
@@ -44,6 +47,21 @@ class UserManager:
             
             try:
                 cursor.execute('ALTER TABLE users ADD COLUMN sheet_name TEXT DEFAULT "比較見積書 ロング"')
+            except sqlite3.OperationalError:
+                pass  # カラムが既に存在する場合
+            
+            try:
+                cursor.execute('ALTER TABLE users ADD COLUMN excel_online_url TEXT')
+            except sqlite3.OperationalError:
+                pass  # カラムが既に存在する場合
+            
+            try:
+                cursor.execute('ALTER TABLE users ADD COLUMN excel_file_id TEXT')
+            except sqlite3.OperationalError:
+                pass  # カラムが既に存在する場合
+            
+            try:
+                cursor.execute('ALTER TABLE users ADD COLUMN excel_sheet_name TEXT')
             except sqlite3.OperationalError:
                 pass  # カラムが既に存在する場合
             
@@ -283,4 +301,36 @@ class UserManager:
                 return result[0], result[1]
             return (None, None)
         except Exception as e:
-            return None, None 
+            return None, None
+
+    def set_user_excel_online(self, user_id, excel_url, file_id, sheet_name="Sheet1"):
+        """顧客のExcel Online設定を保存"""
+        print(f"set_user_excel_online: user_id={user_id}, excel_url={excel_url}, file_id={file_id}, sheet_name={sheet_name}")
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE users 
+                SET excel_online_url = ?, excel_file_id = ?, excel_sheet_name = ?
+                WHERE user_id = ?
+            ''', (excel_url, file_id, sheet_name, user_id))
+            conn.commit()
+            conn.close()
+            return True, "Excel Online設定を登録しました"
+        except Exception as e:
+            return False, f"登録エラー: {str(e)}"
+
+    def get_user_excel_online(self, user_id):
+        """顧客のExcel Online設定を取得"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute('SELECT excel_online_url, excel_file_id, excel_sheet_name FROM users WHERE user_id = ?', (user_id,))
+            result = cursor.fetchone()
+            conn.close()
+            if result:
+                print(f"get_user_excel_online: user_id={user_id}, excel_url={result[0]}, file_id={result[1]}, sheet_name={result[2]}")
+                return result[0], result[1], result[2]
+            return (None, None, None)
+        except Exception as e:
+            return None, None, None 

@@ -11,9 +11,22 @@ from datetime import datetime
 import re
 import os
 import json
+import logging
 from user_management import UserManager
 from stripe_payment import StripePayment
+from excel_online import ExcelOnlineManager
 import sqlite3
+
+# ログ設定
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('app.log'),
+        logging.StreamHandler()  # コンソールにも出力
+    ]
+)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -40,18 +53,31 @@ handler = WebhookHandler(LINE_CHANNEL_SECRET)
 # ユーザー管理システムの初期化
 try:
     user_manager = UserManager()
-    print("User management system initialized successfully")
+    logger.info("User management system initialized successfully")
 except Exception as e:
-    print(f"User management system initialization error: {e}")
+    logger.error(f"User management system initialization error: {e}")
     user_manager = None
 
 # Stripe決済システムの初期化
 try:
     stripe_payment = StripePayment()
-    print("Stripe payment system initialized successfully")
+    logger.info("Stripe payment system initialized successfully")
 except Exception as e:
-    print(f"Stripe payment system initialization error: {e}")
+    logger.error(f"Stripe payment system initialization error: {e}")
     stripe_payment = None
+
+# Excel Onlineシステムの初期化
+try:
+    # 環境変数のデバッグログ
+    logger.info(f"MS_CLIENT_ID: {os.environ.get('MS_CLIENT_ID', 'NOT_SET')}")
+    logger.info(f"MS_CLIENT_SECRET: {os.environ.get('MS_CLIENT_SECRET', 'NOT_SET')[:10]}..." if os.environ.get('MS_CLIENT_SECRET') else 'NOT_SET')
+    logger.info(f"MS_TENANT_ID: {os.environ.get('MS_TENANT_ID', 'NOT_SET')}")
+    
+    excel_online_manager = ExcelOnlineManager()
+    logger.info("Excel Online system initialized successfully")
+except Exception as e:
+    logger.error(f"Excel Online system initialization error: {e}")
+    excel_online_manager = None
 
 # ユーザーセッション管理（簡易版）
 user_sessions = {}
@@ -160,9 +186,82 @@ def extract_spreadsheet_id(url):
     return match.group(1) if match else None
 
 def write_to_spreadsheet(data, user_id=None):
-    """スプレッドシートにデータを書き込み（シート名・項目別対応）"""
+    """スプレッドシートまたはExcel Onlineにデータを書き込み（シート名・項目別対応）"""
     try:
-        print(f"開始: スプレッドシート書き込み処理")
+        print(f"開始: データ書き込み処理")
+        
+        # まずExcel Online設定をチェック
+        excel_online_enabled = False
+        excel_url = None
+        excel_file_id = None
+        excel_sheet_name = None
+        
+        if user_id and user_manager and excel_online_manager:
+            excel_url, excel_file_id, excel_sheet_name = user_manager.get_user_excel_online(user_id)
+            if excel_url and excel_file_id:
+                excel_online_enabled = True
+                print(f"Excel Online設定を検出: {excel_url}")
+        
+        # Excel Onlineが有効な場合はExcel Onlineに書き込み
+        if excel_online_enabled:
+            return write_to_excel_online(data, excel_file_id, excel_sheet_name, user_id)
+        
+        # 従来のGoogle Sheets処理
+        return write_to_google_sheets(data, user_id)
+        
+    except Exception as e:
+        print(f"データ書き込みエラー: {e}")
+        return False, f"データ書き込みエラー: {e}"
+
+def write_to_excel_online(data, file_id, sheet_name, user_id=None):
+    """Excel Onlineにデータを書き込み"""
+    try:
+        print(f"開始: Excel Online書き込み処理")
+        print(f"file_id: {file_id}, sheet_name: {sheet_name}")
+        
+        if not excel_online_manager:
+            return False, "Excel Onlineシステムが利用できません"
+        
+        # 商品データの書き込み
+        if '商品名' in data and '単価' in data and '数量' in data:
+            # 空いている行を探す
+            row_number = 19  # デフォルトの開始行
+            
+            # 既存データを確認して空いている行を探す
+            existing_data, error = excel_online_manager.read_range(file_id, sheet_name, 'A19:G36')
+            if existing_data:
+                for i, row in enumerate(existing_data):
+                    if not any(cell for cell in row[:3] if cell):  # 最初の3列が空の場合
+                        row_number = 19 + i
+                        break
+                else:
+                    row_number = 19 + len(existing_data)  # 最後の行の次の行
+            
+            # 商品データを書き込み
+            success, error = excel_online_manager.write_product_data_excel(data, file_id, sheet_name, row_number)
+            if not success:
+                return False, f"商品データの書き込みに失敗: {error}"
+            
+            print(f"商品データを行 {row_number} に書き込みました")
+            
+        # 会社情報の更新
+        if '社名' in data or '日付' in data:
+            success, error = excel_online_manager.update_company_info_excel(data, file_id, sheet_name)
+            if not success:
+                return False, f"会社情報の更新に失敗: {error}"
+            
+            print("会社情報を更新しました")
+        
+        return True, "Excel Onlineにデータを書き込みました"
+        
+    except Exception as e:
+        print(f"Excel Online書き込みエラー: {e}")
+        return False, f"Excel Online書き込みエラー: {e}"
+
+def write_to_google_sheets(data, user_id=None):
+    """Google Sheetsにデータを書き込み（従来の処理）"""
+    try:
+        print(f"開始: Google Sheets書き込み処理")
         
         # 顧客のスプレッドシートIDを取得
         if user_id and user_manager:
@@ -314,6 +413,53 @@ def update_company_info(data, user_id=None):
     """会社名と日付を更新（シート名別対応）"""
     try:
         print(f"開始: 会社情報更新処理")
+        
+        # まずExcel Online設定をチェック
+        excel_online_enabled = False
+        excel_url = None
+        excel_file_id = None
+        excel_sheet_name = None
+        
+        if user_id and user_manager and excel_online_manager:
+            excel_url, excel_file_id, excel_sheet_name = user_manager.get_user_excel_online(user_id)
+            if excel_url and excel_file_id:
+                excel_online_enabled = True
+                print(f"Excel Online設定を検出: {excel_url}")
+        
+        # Excel Onlineが有効な場合はExcel Onlineに更新
+        if excel_online_enabled:
+            return update_company_info_excel_online(data, excel_file_id, excel_sheet_name, user_id)
+        
+        # 従来のGoogle Sheets処理
+        return update_company_info_google_sheets(data, user_id)
+        
+    except Exception as e:
+        print(f"会社情報更新エラー: {e}")
+        return False, f"会社情報更新エラー: {e}"
+
+def update_company_info_excel_online(data, file_id, sheet_name, user_id=None):
+    """Excel Onlineの会社情報を更新"""
+    try:
+        print(f"開始: Excel Online会社情報更新処理")
+        
+        if not excel_online_manager:
+            return False, "Excel Onlineシステムが利用できません"
+        
+        success, error = excel_online_manager.update_company_info_excel(data, file_id, sheet_name)
+        if not success:
+            return False, f"会社情報の更新に失敗: {error}"
+        
+        print("Excel Onlineの会社情報を更新しました")
+        return True, "Excel Onlineの会社情報を更新しました"
+        
+    except Exception as e:
+        print(f"Excel Online会社情報更新エラー: {e}")
+        return False, f"Excel Online会社情報更新エラー: {e}"
+
+def update_company_info_google_sheets(data, user_id=None):
+    """Google Sheetsの会社情報を更新（従来の処理）"""
+    try:
+        print(f"開始: Google Sheets会社情報更新処理")
         
         # 顧客のスプレッドシートIDを取得
         if user_id and user_manager:
@@ -765,13 +911,12 @@ def create_rich_menu():
             messaging_api = MessagingApi(api_client)
             
             # 既存のリッチメニューを削除
-            try:
-                rich_menus = messaging_api.get_rich_menu_list()
-                for rich_menu in rich_menus.richmenus:
-                    messaging_api.delete_rich_menu(rich_menu.rich_menu_id)
-                    print(f"Deleted existing rich menu: {rich_menu.rich_menu_id}")
-            except Exception as e:
-                print(f"Error deleting existing rich menus: {e}")
+            rich_menus = messaging_api.get_rich_menu_list()
+            deleted_count = 0
+            for rich_menu in rich_menus.richmenus:
+                messaging_api.delete_rich_menu(rich_menu.rich_menu_id)
+                deleted_count += 1
+                logger.info(f"Deleted rich menu: {rich_menu.rich_menu_id}")
             
             rich_menu_dict = {
                 "size": {"width": 1200, "height": 405},
@@ -805,6 +950,46 @@ def create_rich_menu():
 def index():
     return "LINE Bot is running!"
 
+@app.route("/env-check", methods=['GET'])
+def env_check():
+    """環境変数の確認用エンドポイント（デバッグ用）"""
+    env_vars = {
+        'MS_CLIENT_ID': os.environ.get('MS_CLIENT_ID', 'NOT_SET'),
+        'MS_CLIENT_SECRET': 'SET' if os.environ.get('MS_CLIENT_SECRET') else 'NOT_SET',
+        'MS_TENANT_ID': os.environ.get('MS_TENANT_ID', 'NOT_SET'),
+        'LINE_CHANNEL_ACCESS_TOKEN': 'SET' if os.environ.get('LINE_CHANNEL_ACCESS_TOKEN') else 'NOT_SET',
+        'LINE_CHANNEL_SECRET': 'SET' if os.environ.get('LINE_CHANNEL_SECRET') else 'NOT_SET',
+        'SHARED_SPREADSHEET_ID': os.environ.get('SHARED_SPREADSHEET_ID', 'NOT_SET'),
+        'DEFAULT_SHEET_NAME': os.environ.get('DEFAULT_SHEET_NAME', 'NOT_SET'),
+        'STRIPE_SECRET_KEY': 'SET' if os.environ.get('STRIPE_SECRET_KEY') else 'NOT_SET',
+        'STRIPE_WEBHOOK_SECRET': 'SET' if os.environ.get('STRIPE_WEBHOOK_SECRET') else 'NOT_SET',
+        'GOOGLE_SHEETS_CREDENTIALS': 'SET' if os.environ.get('GOOGLE_SHEETS_CREDENTIALS') else 'NOT_SET',
+        'PORT': os.environ.get('PORT', 'NOT_SET'),
+        'FLASK_ENV': os.environ.get('FLASK_ENV', 'NOT_SET')
+    }
+    
+    html = """
+    <html>
+    <head><title>環境変数確認</title></head>
+    <body style="font-family: Arial, sans-serif; padding: 20px;">
+        <h1>環境変数確認</h1>
+        <table border="1" style="border-collapse: collapse; width: 100%;">
+            <tr><th>変数名</th><th>値</th></tr>
+    """
+    
+    for key, value in env_vars.items():
+        status_color = "green" if value != "NOT_SET" else "red"
+        html += f'<tr><td>{key}</td><td style="color: {status_color};">{value}</td></tr>'
+    
+    html += """
+        </table>
+        <p><small>※ セキュリティのため、一部の値は「SET」と表示されます</small></p>
+    </body>
+    </html>
+    """
+    
+    return html
+
 @app.route("/create-rich-menu", methods=['GET'])
 def create_rich_menu_endpoint():
     """リッチメニュー作成エンドポイント"""
@@ -830,7 +1015,7 @@ def delete_rich_menu_endpoint():
             for rich_menu in rich_menus.richmenus:
                 messaging_api.delete_rich_menu(rich_menu.rich_menu_id)
                 deleted_count += 1
-                print(f"Deleted rich menu: {rich_menu.rich_menu_id}")
+                logger.info(f"Deleted rich menu: {rich_menu.rich_menu_id}")
             
             return f"Deleted {deleted_count} rich menus successfully"
     except Exception as e:
@@ -838,17 +1023,17 @@ def delete_rich_menu_endpoint():
 
 @app.route("/callback", methods=['POST'])
 def callback():
-    print("Webhook受信")
+    logger.info("Webhook受信")
     signature = request.headers['X-Line-Signature']
     body = request.get_data(as_text=True)
-    print(f"Received webhook: {body[:100]}...")  # ログ追加
+    logger.info(f"Received webhook: {body[:100]}...")  # ログ追加
     try:
         handler.handle(body, signature)
     except InvalidSignatureError as e:
-        print(f"Invalid signature error: {e}")  # ログ追加
+        logger.error(f"Invalid signature error: {e}")  # ログ追加
         abort(400)
     except Exception as e:
-        print(f"Unexpected error: {e}")  # ログ追加
+        logger.error(f"Unexpected error: {e}")  # ログ追加
         abort(500)
     return 'OK'
 
@@ -856,7 +1041,10 @@ def callback():
 def handle_message(event):
     user_text = event.message.text.strip()
     user_id = event.source.user_id
-    print(f"Received message from {user_id}: {user_text}")
+    logger.info(f"Received message from {user_id}: {user_text}")
+    
+    # reply変数を初期化
+    reply = ""
     
     # ユーザー登録（初回利用時）
     if user_manager:
@@ -865,11 +1053,11 @@ def handle_message(event):
             # 新規ユーザー登録
             success, message = user_manager.register_user(user_id, "LINE User")
             if success:
-                print(f"New user registered: {user_id}")
+                logger.info(f"New user registered: {user_id}")
             else:
-                print(f"User registration failed: {message}")
+                logger.error(f"User registration failed: {message}")
     else:
-        print("User management system not available")
+        logger.warning("User management system not available")
 
     # リッチメニューやテキストコマンドに応じた返答
     if user_text in ["商品を追加"]:
@@ -1018,6 +1206,104 @@ def handle_message(event):
         send_flex_message(event.reply_token, flex_message)
         return
 
+    # Excel Online URLの処理
+    elif re.search(r"Excel[\s　]*Online[\s　]*登録[：:]", user_text) or re.search(r"エクセル[\s　]*オンライン[\s　]*登録[：:]", user_text):
+        print("Excel Online登録コマンドを検出")
+        # URLを抽出
+        url = None
+        sheet_name = None
+        for line in user_text.splitlines():
+            if not url:
+                m_url = re.search(r"https?://[\w\-./?%&=:#]+", line)
+                if m_url:
+                    url = m_url.group(0).strip()
+            if not sheet_name:
+                m_sheet = re.search(r"シート名[：:]?[\s　]*(.+)", line)
+                if m_sheet:
+                    sheet_name = m_sheet.group(1).strip()
+        
+        print(f"Excel Online URL: {url}, sheet_name: {sheet_name}")
+        
+        if url and excel_online_manager:
+            # URLの妥当性をチェック
+            is_valid, error_msg = excel_online_manager.validate_excel_url(url)
+            if not is_valid:
+                reply = f"❌ Excel Online URLが正しくありません: {error_msg}\n\n"
+                reply += "正しい形式：\n"
+                reply += "Excel Online登録:https://unimatlifejp-my.sharepoint.com/...\n\n"
+                reply += "または、シート名を指定：\n"
+                reply += "Excel Online登録:https://unimatlifejp-my.sharepoint.com/... シート名:見積書"
+                send_text_message(event.reply_token, reply)
+                return
+            
+            # ファイルIDを抽出
+            file_id = excel_online_manager.extract_file_id_from_url(url)
+            if not file_id:
+                reply = "❌ Excel Online URLからファイルIDを抽出できませんでした。\n\n"
+                reply += "正しいSharePoint/OneDrive URLを入力してください。"
+                send_text_message(event.reply_token, reply)
+                return
+            
+            # シート名が指定されていない場合は実際のシート名を取得
+            if not sheet_name:
+                try:
+                    worksheets, error = excel_online_manager.get_worksheets(file_id)
+                    if worksheets and not error:
+                        sheet_name = worksheets[0]  # 最初のシートを使用
+                        print(f"取得したシート名: {sheet_name}")
+                    else:
+                        sheet_name = "Sheet1"  # フォールバック
+                        print(f"シート名取得エラー: {error}")
+                except Exception as e:
+                    print(f"シート名取得エラー: {e}")
+                    sheet_name = "Sheet1"  # フォールバック
+            
+            # ユーザーのExcel Online設定を保存
+            success, message = user_manager.set_user_excel_online(user_id, url, file_id, sheet_name)
+            if success:
+                reply = f"✅ Excel Onlineファイルを登録しました！\n\n"
+                reply += f"📊 Excel Online URL:\n"
+                reply += f"{url}\n\n"
+                reply += f"📋 シート名: {sheet_name}\n\n"
+                reply += "これで商品データがこのExcel Onlineファイルに反映されます。"
+            else:
+                reply = f"❌ 登録エラー: {message}"
+        else:
+            reply = "❌ Excel Online URLが正しくありません。\n\n"
+            reply += "正しい形式：\n"
+            reply += "Excel Online登録:https://unimatlifejp-my.sharepoint.com/...\n\n"
+            reply += "または、シート名を指定：\n"
+            reply += "Excel Online登録:https://unimatlifejp-my.sharepoint.com/... シート名:見積書\n\n"
+            reply += "⚠️ 重要：\n"
+            reply += "• SharePoint/OneDriveのExcel Onlineファイルを使用してください\n"
+            reply += "• ファイルは共有設定で「編集者」に設定してください\n"
+            reply += "• シート名を指定しない場合は、最初のシートが使用されます"
+        send_text_message(event.reply_token, reply)
+        return
+
+    elif user_text == "Excel Online確認" or user_text == "エクセルオンライン確認":
+        print(f"Excel Online確認処理開始: user_id={user_id}")
+        if user_manager:
+            excel_url, excel_file_id, excel_sheet_name = user_manager.get_user_excel_online(user_id)
+            print(f"取得結果: excel_url={excel_url}, excel_file_id={excel_file_id}, excel_sheet_name={excel_sheet_name}")
+            if excel_url:
+                reply = f"📊 あなたのExcel Onlineファイル\n\n"
+                reply += f"Excel Online URL:\n"
+                reply += f"{excel_url}\n\n"
+                reply += f"シート名: {excel_sheet_name}"
+            else:
+                reply = f"📊 共有スプレッドシートを使用中\n\n"
+                reply += f"スプレッドシートURL:\n"
+                reply += f"https://docs.google.com/spreadsheets/d/{SHARED_SPREADSHEET_ID}\n\n"
+                reply += f"シート名: {DEFAULT_SHEET_NAME}\n\n"
+                reply += "💡 Excel Onlineファイルを使用したい場合は、以下の形式で登録してください：\n"
+                reply += "Excel Online登録:https://unimatlifejp-my.sharepoint.com/... シート名:見積書"
+        else:
+            print("user_manager is None")
+            reply = "❌ システムエラー: ユーザー管理システムが利用できません。"
+        send_text_message(event.reply_token, reply)
+        return
+
     # それ以外は従来通りの案内＋データ解析・登録
     data = parse_estimate_data(user_text)
     if data:
@@ -1078,6 +1364,18 @@ def handle_message(event):
             reply += "【語尾指定（比較見積書系のみ）】\n"
             reply += "商品名:マット 現状  ← 現状用の列に書き込み\n"
             reply += "商品名:マット 当社  ← 当社用の列に書き込み"
+    else:
+        # データが解析できない場合のデフォルトメッセージ
+        reply = "見積書作成システムへようこそ！\n\n"
+        reply += "以下のコマンドが利用できます：\n\n"
+        reply += "📝 商品を追加\n"
+        reply += "📊 スプレッドシート登録\n"
+        reply += "📊 Excel Online登録\n"
+        reply += "🏢 会社情報を更新\n"
+        reply += "📈 利用状況確認\n"
+        reply += "💳 プランアップグレード\n\n"
+        reply += "詳細は「メニュー」ボタンからご確認ください。"
+    
     send_text_message(event.reply_token, reply)
 
 @handler.add(PostbackEvent)
@@ -1493,9 +1791,23 @@ def get_user_state(user_id):
 def set_user_state(user_id, state):
     """ユーザーの状態を設定"""
     user_states[user_id] = state
-    print(f"User {user_id} state set to: {state}")
+    logger.info(f"User {user_id} state set to: {state}")
 
 if __name__ == "__main__":
+    logger.info("=== アプリケーション起動開始 ===")
+    logger.info("環境変数の確認:")
+    logger.info(f"MS_CLIENT_ID: {os.environ.get('MS_CLIENT_ID', 'NOT_SET')}")
+    logger.info(f"MS_CLIENT_SECRET: {os.environ.get('MS_CLIENT_SECRET', 'NOT_SET')[:10]}..." if os.environ.get('MS_CLIENT_SECRET') else 'NOT_SET')
+    logger.info(f"MS_TENANT_ID: {os.environ.get('MS_TENANT_ID', 'NOT_SET')}")
+    logger.info(f"LINE_CHANNEL_ACCESS_TOKEN: {os.environ.get('LINE_CHANNEL_ACCESS_TOKEN', 'NOT_SET')[:10]}..." if os.environ.get('LINE_CHANNEL_ACCESS_TOKEN') else 'NOT_SET')
+    logger.info(f"LINE_CHANNEL_SECRET: {os.environ.get('LINE_CHANNEL_SECRET', 'NOT_SET')[:10]}..." if os.environ.get('LINE_CHANNEL_SECRET') else 'NOT_SET')
+    logger.info(f"SHARED_SPREADSHEET_ID: {os.environ.get('SHARED_SPREADSHEET_ID', 'NOT_SET')}")
+    logger.info(f"DEFAULT_SHEET_NAME: {os.environ.get('DEFAULT_SHEET_NAME', 'NOT_SET')}")
+    logger.info(f"STRIPE_SECRET_KEY: {os.environ.get('STRIPE_SECRET_KEY', 'NOT_SET')[:10]}..." if os.environ.get('STRIPE_SECRET_KEY') else 'NOT_SET')
+    logger.info(f"STRIPE_WEBHOOK_SECRET: {os.environ.get('STRIPE_WEBHOOK_SECRET', 'NOT_SET')[:10]}..." if os.environ.get('STRIPE_WEBHOOK_SECRET') else 'NOT_SET')
+    logger.info(f"GOOGLE_SHEETS_CREDENTIALS: {'SET' if os.environ.get('GOOGLE_SHEETS_CREDENTIALS') else 'NOT_SET'}")
+    logger.info("=== アプリケーション起動完了 ===")
+    
     port = int(os.environ.get('PORT', 5002))
     debug_mode = os.environ.get('FLASK_ENV') == 'development'
     app.run(host='0.0.0.0', port=port, debug=debug_mode)

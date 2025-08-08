@@ -3,7 +3,7 @@ services:
     name: line-bot-estimate
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.7
@@ -13,11 +13,21 @@ services:
         sync: false
       - key: SPREADSHEET_ID
         sync: false
+      - key: SHARED_SPREADSHEET_ID
+        sync: false
       - key: SHEET_NAME
+        value: "比較見積書 ロング"
+      - key: DEFAULT_SHEET_NAME
         value: "比較見積書 ロング"
       - key: GOOGLE_SHEETS_CREDENTIALS
         sync: false
       - key: STRIPE_SECRET_KEY
         sync: false
       - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: MS_CLIENT_ID
+        sync: false
+      - key: MS_CLIENT_SECRET
+        sync: false
+      - key: MS_TENANT_ID
         sync: false 
