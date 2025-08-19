@@ -165,8 +165,8 @@ class ExcelOnlineManager:
         except Exception as e:
             return False, f"データ書き込みエラー: {e}"
     
-    def clear_range(self, file_id, sheet_name, range_address):
-        """指定された範囲のデータをクリア"""
+    def clear_new_estimate_short_only(self, file_id, sheet_name):
+        """新規見積書　ショート専用のリセット（B23:D23には一切触れない）"""
         try:
             access_token = self.get_access_token()
             if not access_token:
@@ -180,16 +180,243 @@ class ExcelOnlineManager:
             # シート名をURLエンコード
             import urllib.parse
             encoded_sheet_name = urllib.parse.quote(sheet_name)
-            encoded_range = urllib.parse.quote(range_address)
             
-            url = f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}/workbook/worksheets/{encoded_sheet_name}/range(address='{encoded_range}')/clear"
+            print("新規見積書　ショートのリセットを開始します（B23:D23は保護されます）")
             
-            response = requests.post(url, headers=headers)
-            
-            if response.status_code == 200:
-                return True, None
+            # B23:D23のヘッダー行を事前にバックアップ
+            print("B23:D23のヘッダー行をバックアップ中...")
+            header_backup, error = self.read_range(file_id, sheet_name, 'B23:D23')
+            if error:
+                print(f"警告: ヘッダー行のバックアップに失敗: {error}")
+                header_backup = None
             else:
-                return False, f"データクリアエラー: {response.status_code} - {response.text}"
+                print(f"ヘッダー行をバックアップしました: {header_backup}")
+            
+            # B24:G30の範囲を個別セルで処理（B23:D23は除外）
+            target_cells = []
+            
+            # B列、C列、D列の24行目から30行目（B28:D28も含む）
+            for col in ['B', 'C', 'D']:
+                for row in range(24, 31):  # 24行目から30行目
+                    target_cells.append(f"{col}{row}")
+            
+            # E列、F列、G列の24行目から30行目
+            for col in ['E', 'F', 'G']:
+                for row in range(24, 31):  # 24行目から30行目
+                    target_cells.append(f"{col}{row}")
+            
+            print(f"リセット対象セル数: {len(target_cells)}")
+            print(f"リセット対象セル: {target_cells}")
+            
+            # 各セルを個別にクリア
+            cleared_count = 0
+            for cell_address in target_cells:
+                encoded_cell = urllib.parse.quote(cell_address)
+                url = f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}/workbook/worksheets/{encoded_sheet_name}/range(address='{encoded_cell}')"
+                
+                payload = {
+                    "values": [['']]
+                }
+                
+                response = requests.patch(url, headers=headers, json=payload)
+                
+                if response.status_code != 200:
+                    print(f"警告: セル {cell_address} のクリアに失敗: {response.status_code}")
+                else:
+                    print(f"クリア: セル {cell_address}")
+                    cleared_count += 1
+                
+                # 各セルの処理後に少し待機
+                import time
+                time.sleep(0.1)
+            
+            # 処理完了後に少し待機
+            import time
+            time.sleep(0.5)
+            
+            # B23:D23のヘッダー行を復元
+            if header_backup:
+                print("B23:D23のヘッダー行を復元中...")
+                success, error = self.write_range(file_id, sheet_name, 'B23:D23', header_backup)
+                if success:
+                    print("ヘッダー行の復元が完了しました")
+                else:
+                    print(f"警告: ヘッダー行の復元に失敗: {error}")
+                    
+                    # 復元に失敗した場合は、再度試行
+                    print("ヘッダー行の復元を再試行中...")
+                    time.sleep(1)
+                    success, error = self.write_range(file_id, sheet_name, 'B23:D23', header_backup)
+                    if success:
+                        print("ヘッダー行の復元が完了しました（再試行成功）")
+                    else:
+                        print(f"警告: ヘッダー行の復元に再び失敗: {error}")
+            
+            print(f"リセット完了: {cleared_count}/{len(target_cells)} セルをクリアしました")
+            return True, f"新規見積書　ショートのリセットが完了しました（{cleared_count}セルをクリア、B23:D23は保護）"
+                
+        except Exception as e:
+            return False, f"新規見積書　ショートリセットエラー: {e}"
+
+    def clear_range_safe_for_new_estimate_short(self, file_id, sheet_name):
+        """新規見積書　ショート専用の安全なリセット（B23:D23を保護）"""
+        try:
+            access_token = self.get_access_token()
+            if not access_token:
+                return False, "アクセストークンの取得に失敗しました"
+            
+            headers = {
+                'Authorization': f'Bearer {access_token}',
+                'Content-Type': 'application/json'
+            }
+            
+            # シート名をURLエンコード
+            import urllib.parse
+            encoded_sheet_name = urllib.parse.quote(sheet_name)
+            
+            # B23:D23のヘッダー行を事前にバックアップ
+            print("B23:D23のヘッダー行をバックアップ中...")
+            header_backup, error = self.read_range(file_id, sheet_name, 'B23:D23')
+            if error:
+                print(f"警告: ヘッダー行のバックアップに失敗: {error}")
+                header_backup = None
+            else:
+                print(f"ヘッダー行をバックアップしました: {header_backup}")
+            
+            # 新規見積書　ショートのリセット範囲を個別に処理
+            # 各列を個別にクリアして安全性を確保
+            clear_columns = [
+                ('B', 24, 30),  # B列 24行目から30行目
+                ('C', 24, 30),  # C列 24行目から30行目
+                ('D', 24, 30),  # D列 24行目から30行目
+                ('E', 24, 30),  # E列 24行目から30行目
+                ('F', 24, 30),  # F列 24行目から30行目
+                ('G', 24, 30)   # G列 24行目から30行目
+            ]
+            
+            # 各列を個別にクリア
+            for col_letter, start_row, end_row in clear_columns:
+                print(f"{col_letter}列 {start_row}行目から{end_row}行目をクリア中...")
+                
+                # 各セルを個別にクリア
+                for row in range(start_row, end_row + 1):
+                    cell_address = f"{col_letter}{row}"
+                    
+                    # B23:D23の範囲は絶対にクリアしない
+                    if row == 23 and col_letter in ['B', 'C', 'D']:
+                        print(f"保護: セル {cell_address} はヘッダー行のためスキップ")
+                        continue
+                    
+                    encoded_cell = urllib.parse.quote(cell_address)
+                    url = f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}/workbook/worksheets/{encoded_sheet_name}/range(address='{encoded_cell}')"
+                    
+                    payload = {
+                        "values": [['']]
+                    }
+                    
+                    response = requests.patch(url, headers=headers, json=payload)
+                    
+                    if response.status_code != 200:
+                        print(f"警告: セル {cell_address} のクリアに失敗: {response.status_code}")
+                    else:
+                        print(f"クリア: セル {cell_address}")
+                
+                # 各列の処理後に少し待機
+                import time
+                time.sleep(0.3)
+            
+            # リセット処理完了後に少し待機
+            import time
+            time.sleep(1)
+            
+            # B23:D23のヘッダー行を復元
+            if header_backup:
+                print("B23:D23のヘッダー行を復元中...")
+                success, error = self.write_range(file_id, sheet_name, 'B23:D23', header_backup)
+                if success:
+                    print("ヘッダー行の復元が完了しました")
+                else:
+                    print(f"警告: ヘッダー行の復元に失敗: {error}")
+                    
+                    # 復元に失敗した場合は、再度試行
+                    print("ヘッダー行の復元を再試行中...")
+                    time.sleep(2)
+                    success, error = self.write_range(file_id, sheet_name, 'B23:D23', header_backup)
+                    if success:
+                        print("ヘッダー行の復元が完了しました（再試行成功）")
+                    else:
+                        print(f"警告: ヘッダー行の復元に再び失敗: {error}")
+            
+            return True, "新規見積書　ショートのリセットが完了しました（B23:D23は保護されました）"
+                
+        except Exception as e:
+            return False, f"新規見積書　ショートリセットエラー: {e}"
+
+    def clear_range(self, file_id, sheet_name, range_address):
+        """指定された範囲のデータをクリア（個別セルで安全にクリア）"""
+        try:
+            access_token = self.get_access_token()
+            if not access_token:
+                return False, "アクセストークンの取得に失敗しました"
+            
+            headers = {
+                'Authorization': f'Bearer {access_token}',
+                'Content-Type': 'application/json'
+            }
+            
+            # シート名をURLエンコード
+            import urllib.parse
+            encoded_sheet_name = urllib.parse.quote(sheet_name)
+            
+            # 範囲のサイズを計算
+            import re
+            range_match = re.match(r'([A-Z]+)(\d+):([A-Z]+)(\d+)', range_address)
+            if not range_match:
+                return False, "無効な範囲形式です"
+            
+            start_col = range_match.group(1)
+            start_row = int(range_match.group(2))
+            end_col = range_match.group(3)
+            end_row = int(range_match.group(4))
+            
+            # 列を数値に変換
+            def col_to_num(col):
+                result = 0
+                for char in col:
+                    result = result * 26 + (ord(char) - ord('A') + 1)
+                return result
+            
+            def num_to_col(num):
+                result = ""
+                while num > 0:
+                    num -= 1
+                    result = chr(num % 26 + ord('A')) + result
+                    num //= 26
+                return result
+            
+            start_col_num = col_to_num(start_col)
+            end_col_num = col_to_num(end_col)
+            
+            # 各セルを個別にクリア（より安全な方法）
+            for row in range(start_row, end_row + 1):
+                for col_num in range(start_col_num, end_col_num + 1):
+                    col_letter = num_to_col(col_num)
+                    cell_address = f"{col_letter}{row}"
+                    encoded_cell = urllib.parse.quote(cell_address)
+                    
+                    url = f"https://graph.microsoft.com/v1.0/me/drive/items/{file_id}/workbook/worksheets/{encoded_sheet_name}/range(address='{encoded_cell}')"
+                    
+                    payload = {
+                        "values": [['']]
+                    }
+                    
+                    response = requests.patch(url, headers=headers, json=payload)
+                    
+                    if response.status_code != 200:
+                        print(f"警告: セル {cell_address} のクリアに失敗: {response.status_code}")
+                        # 個別セルの失敗は警告として記録するが、処理は続行
+            
+            return True, None
                 
         except Exception as e:
             return False, f"データクリアエラー: {e}"

@@ -1,8 +1,9 @@
-from flask import Flask, request, abort, redirect, url_for
+from flask import Flask, request, abort, redirect, url_for, jsonify
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import (
-    Configuration, ApiClient, MessagingApi, ReplyMessageRequest, TextMessage, FlexMessage, FlexContainer
+    Configuration, ApiClient, MessagingApi, ReplyMessageRequest, 
+    TextMessage, FlexMessage, FlexContainer
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent, PostbackEvent
 import gspread
@@ -16,6 +17,7 @@ from user_management import UserManager
 from stripe_payment import StripePayment
 from excel_online import ExcelOnlineManager
 import sqlite3
+import traceback
 
 # ログ設定
 logging.basicConfig(
@@ -129,19 +131,34 @@ SHEET_WRITE_CONFIG = {
 def setup_google_sheets():
     """Google Sheets APIの設定"""
     try:
-        # 環境変数からサービスアカウント情報を取得
-        service_account_info = os.environ.get('GOOGLE_SHEETS_CREDENTIALS')
-        if service_account_info:
-            creds = Credentials.from_service_account_info(
-                json.loads(service_account_info), scopes=SCOPES)
-        else:
-            # ローカル開発用（ファイルから読み込み）
+        print("=== Google Sheets設定開始 ===")
+        
+        # ローカルファイルを優先的に使用
+        if os.path.exists('gsheet_service_account.json'):
+            print("ローカルファイルからサービスアカウント情報を読み込み中...")
             creds = Credentials.from_service_account_file(
                 'gsheet_service_account.json', scopes=SCOPES)
+            print("ローカルファイルからの読み込み成功")
+        else:
+            # 環境変数からサービスアカウント情報を取得
+            service_account_info = os.environ.get('GOOGLE_SHEETS_CREDENTIALS')
+            print(f"GOOGLE_SHEETS_CREDENTIALS: {'SET' if service_account_info else 'NOT_SET'}")
+            
+            if service_account_info:
+                print("環境変数からサービスアカウント情報を読み込み中...")
+                creds = Credentials.from_service_account_info(
+                    json.loads(service_account_info), scopes=SCOPES)
+                print("環境変数からの読み込み成功")
+            else:
+                print("サービスアカウント情報が見つかりません")
+                return None
+        
+        print("gspreadクライアントを認証中...")
         client = gspread.authorize(creds)
+        print("=== Google Sheets設定完了 ===")
         return client
     except Exception as e:
-        print(f"Google Sheets setup error: {e}")
+        print(f"=== Google Sheets setup error: {e} ===")
         return None
 
 def parse_estimate_data(text):
@@ -935,6 +952,7 @@ def create_rich_menu():
                 deleted_count += 1
                 logger.info(f"Deleted rich menu: {rich_menu.rich_menu_id}")
             
+            # LINE Bot SDK v3の正しい形式でリッチメニューを作成
             rich_menu_dict = {
                 "size": {"width": 1200, "height": 405},
                 "selected": False,
@@ -942,39 +960,159 @@ def create_rich_menu():
                 "chatBarText": "メニュー",
                 "areas": [
                     {
-                        "bounds": {"x": 0, "y": 0, "width": 200, "height": 405},
-                        "action": {"type": "message", "label": "商品を追加", "text": "商品を追加"}
+                        "bounds": {"x": 0, "y": 0, "width": 150, "height": 405},
+                        "action": {
+                            "type": "message",
+                            "text": "商品を追加"
+                        }
                     },
                     {
-                        "bounds": {"x": 200, "y": 0, "width": 200, "height": 405},
-                        "action": {"type": "message", "label": "リセット", "text": "リセット"}
+                        "bounds": {"x": 150, "y": 0, "width": 150, "height": 405},
+                        "action": {
+                            "type": "message",
+                            "text": "リセット"
+                        }
                     },
                     {
-                        "bounds": {"x": 400, "y": 0, "width": 200, "height": 405},
-                        "action": {"type": "message", "label": "会社情報を変更", "text": "会社情報を更新"}
+                        "bounds": {"x": 300, "y": 0, "width": 150, "height": 405},
+                        "action": {
+                            "type": "message",
+                            "text": "会社情報を更新"
+                        }
                     },
                     {
-                        "bounds": {"x": 600, "y": 0, "width": 200, "height": 405},
-                        "action": {"type": "message", "label": "利用状況確認", "text": "利用状況確認"}
+                        "bounds": {"x": 450, "y": 0, "width": 150, "height": 405},
+                        "action": {
+                            "type": "message",
+                            "text": "利用状況確認"
+                        }
                     },
                     {
-                        "bounds": {"x": 800, "y": 0, "width": 200, "height": 405},
-                        "action": {"type": "message", "label": "見積書を確認", "text": "見積書を確認"}
+                        "bounds": {"x": 600, "y": 0, "width": 150, "height": 405},
+                        "action": {
+                            "type": "message",
+                            "text": "見積書を確認"
+                        }
                     },
                     {
-                        "bounds": {"x": 1000, "y": 0, "width": 200, "height": 405},
-                        "action": {"type": "message", "label": "スプレッドシート登録", "text": "スプレッドシート登録"}
+                        "bounds": {"x": 750, "y": 0, "width": 150, "height": 405},
+                        "action": {
+                            "type": "message",
+                            "text": "スプレッドシート登録"
+                        }
+                    },
+                    {
+                        "bounds": {"x": 900, "y": 0, "width": 150, "height": 405},
+                        "action": {
+                            "type": "message",
+                            "text": "シート名変更"
+                        }
                     }
                 ]
             }
+            
+            print(f"Creating rich menu with data: {rich_menu_dict}")
+            
+            # リッチメニューを作成
             rich_menu_id = messaging_api.create_rich_menu(rich_menu_dict).rich_menu_id
             messaging_api.set_default_rich_menu(rich_menu_id)
             print(f"Rich menu created and set as default: {rich_menu_id}")
             return rich_menu_id
     except Exception as e:
         print(f"Rich menu creation error: {e}")
+        print(f"Error type: {type(e)}")
+        print(f"Error details: {str(e)}")
+        if hasattr(e, 'response'):
+            print(f"Response status: {e.response.status_code}")
+            print(f"Response body: {e.response.text}")
         return None
 
+def create_simple_rich_menu():
+    """シンプルなリッチメニューを作成（テスト用）"""
+    try:
+        with ApiClient(configuration) as api_client:
+            messaging_api = MessagingApi(api_client)
+            
+            # 既存のリッチメニューを削除
+            rich_menus = messaging_api.get_rich_menu_list()
+            for rich_menu in rich_menus.richmenus:
+                messaging_api.delete_rich_menu(rich_menu.rich_menu_id)
+                print(f"Deleted rich menu: {rich_menu.rich_menu_id}")
+            
+            # シンプルなリッチメニューを作成
+            rich_menu_dict = {
+                "size": {"width": 800, "height": 270},
+                "selected": False,
+                "name": "シンプルメニュー",
+                "chatBarText": "メニュー",
+                "areas": [
+                    {
+                        "bounds": {"x": 0, "y": 0, "width": 400, "height": 270},
+                        "action": {
+                            "type": "message",
+                            "text": "テストメッセージ1"
+                        }
+                    },
+                    {
+                        "bounds": {"x": 400, "y": 0, "width": 400, "height": 270},
+                        "action": {
+                            "type": "message",
+                            "text": "テストメッセージ2"
+                        }
+                    }
+                ]
+            }
+            
+            rich_menu_id = messaging_api.create_rich_menu(rich_menu_dict).rich_menu_id
+            messaging_api.set_default_rich_menu(rich_menu_id)
+            print(f"Simple rich menu created and set as default: {rich_menu_id}")
+            return rich_menu_id
+    except Exception as e:
+        print(f"Simple rich menu creation error: {e}")
+        if hasattr(e, 'response'):
+            print(f"Response status: {e.response.status_code}")
+            print(f"Response body: {e.response.text}")
+        return None
+
+def create_minimal_rich_menu():
+    """最小限のリッチメニューを作成（テスト用）"""
+    try:
+        with ApiClient(configuration) as api_client:
+            messaging_api = MessagingApi(api_client)
+            
+            # 既存のリッチメニューを削除
+            rich_menus = messaging_api.get_rich_menu_list()
+            for rich_menu in rich_menus.richmenus:
+                messaging_api.delete_rich_menu(rich_menu.rich_menu_id)
+                print(f"Deleted rich menu: {rich_menu.rich_menu_id}")
+            
+            # 最小限のリッチメニューを作成
+            rich_menu_dict = {
+                "size": {"width": 2500, "height": 843},
+                "selected": False,
+                "name": "最小限メニュー",
+                "chatBarText": "メニュー",
+                "areas": [
+                    {
+                        "bounds": {"x": 0, "y": 0, "width": 1250, "height": 843},
+                        "action": {
+                            "type": "message",
+                            "text": "テスト"
+                        }
+                    }
+                ]
+            }
+            
+            rich_menu_id = messaging_api.create_rich_menu(rich_menu_dict).rich_menu_id
+            messaging_api.set_default_rich_menu(rich_menu_id)
+            print(f"Minimal rich menu created and set as default: {rich_menu_id}")
+            return rich_menu_id
+    except Exception as e:
+        print(f"Minimal rich menu creation error: {e}")
+        if hasattr(e, 'response'):
+            print(f"Response status: {e.response.status_code}")
+            print(f"Response body: {e.response.text}")
+        return None
 @app.route("/", methods=['GET'])
 def index():
     return "LINE Bot is running!"
@@ -1029,7 +1167,10 @@ def create_rich_menu_endpoint():
         else:
             return "Failed to create rich menu"
     except Exception as e:
-        return f"Error: {str(e)}"
+        error_info = f"Error: {str(e)}\nError type: {type(e)}"
+        if hasattr(e, 'response'):
+            error_info += f"\nResponse status: {e.response.status_code}\nResponse body: {e.response.text}"
+        return error_info
 
 @app.route("/delete-rich-menu", methods=['GET'])
 def delete_rich_menu_endpoint():
@@ -1068,9 +1209,19 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
-    user_text = event.message.text.strip()
     user_id = event.source.user_id
-    logger.info(f"Received message from {user_id}: {user_text}")
+    user_text = event.message.text.strip()
+    
+    # デバッグ情報を追加
+    print(f"=== メッセージ受信 ===")
+    print(f"user_id: {user_id}")
+    print(f"user_text: '{user_text}'")
+    print(f"user_text length: {len(user_text)}")
+    print(f"user_text bytes: {user_text.encode('utf-8')}")
+    print(f"=== メッセージ受信終了 ===")
+    
+    # グローバル変数のuser_managerを使用
+    global user_manager
     
     # reply変数を初期化
     reply = ""
@@ -1092,12 +1243,30 @@ def handle_message(event):
     if user_text in ["商品を追加"]:
         # ユーザーの状態を商品追加に設定
         set_user_state(user_id, 'product_add')
-        # シート選択画面を表示
-        flex_message = FlexMessage(
-            alt_text="シート選択",
-            contents=FlexContainer.from_dict(create_sheet_selection())
-        )
-        send_flex_message(event.reply_token, flex_message)
+        # 入力フォーマットを表示
+        reply = "商品を追加するには、以下の形式で入力してください：\n\n"
+        reply += "「比較見積書 ロング」\n"
+        reply += "・商品名：\n"
+        reply += "・単価：\n"
+        reply += "・数量：\n"
+        reply += "・サイクル：\n\n"
+        reply += "「比較御見積書　ショート」\n"
+        reply += "・商品名：\n"
+        reply += "・単価：\n"
+        reply += "・数量：\n"
+        reply += "・サイクル：\n\n"
+        reply += "「新規見積書　ショート」\n"
+        reply += "・商品名：\n"
+        reply += "・サイクル：\n"
+        reply += "・数量：\n"
+        reply += "・単価：\n\n"
+        reply += "「新規見積書　ロング」\n"
+        reply += "・商品名：\n"
+        reply += "・設置場所：\n"
+        reply += "・サイクル：\n"
+        reply += "・数量：\n"
+        reply += "・単価："
+        send_text_message(event.reply_token, reply)
         return
     elif user_text in ["スプレッドシート登録"]:
         # ユーザーの状態をスプレッドシート登録に設定
@@ -1140,18 +1309,67 @@ def handle_message(event):
         return
     elif user_text in ["リセット"]:
         # リセット機能
-        success, message = reset_spreadsheet_data(user_id)
-        if success:
-            reply = "✅ 商品データをリセットしました！\n\n"
-            reply += "📋 リセット内容:\n"
-            reply += "• 商品名、単価、数量、サイクルなどの商品データをクリア\n"
-            reply += "• 会社名と日付は保持されます\n\n"
-            reply += "💡 新しい商品を追加する場合は「商品を追加」と入力してください。"
-        else:
-            reply = f"❌ リセットエラー: {message}\n\n"
-            reply += "スプレッドシートの権限設定を確認してください。"
+        print(f"=== リセット機能開始 ===")
+        print(f"user_id: {user_id}")
+        print(f"user_text: '{user_text}'")
+        
+        try:
+            success, message = reset_spreadsheet_data(user_id)
+            print(f"リセット結果: success={success}, message={message}")
+            
+            if success:
+                reply = "✅ 商品データをリセットしました！\n\n"
+                reply += "📋 リセット内容:\n"
+                reply += "• 商品名、単価、数量、サイクルなどの商品データをクリア\n"
+                reply += "• 会社名と日付は保持されます\n\n"
+                reply += "💡 新しい商品を追加する場合は「商品を追加」と入力してください。"
+            else:
+                reply = f"❌ リセットエラー: {message}\n\n"
+                reply += "スプレッドシートの権限設定を確認してください。"
+        except Exception as e:
+            print(f"リセット機能でエラーが発生: {e}")
+            reply = f"❌ リセット機能でエラーが発生しました: {e}\n\n"
+            reply += "システム管理者にお問い合わせください。"
+        
+        print(f"リセット機能終了: {reply}")
         send_text_message(event.reply_token, reply)
         return
+    elif user_text in ["シート名変更"]:
+        # シート名変更機能
+        print(f"=== シート名変更機能開始 ===")
+        print(f"user_id: {user_id}")
+        print(f"user_text: '{user_text}'")
+        
+        if user_manager:
+            print("ユーザー管理システム: 利用可能")
+            # ユーザーの状態をシート名変更に設定
+            set_user_state(user_id, 'sheet_name_change')
+            print(f"ユーザー状態を設定: sheet_name_change")
+            
+            # 現在のスプレッドシート情報を取得
+            current_spreadsheet_id, current_sheet_name = user_manager.get_user_spreadsheet(user_id)
+            current_excel_url, current_excel_file_id, current_excel_sheet_name = user_manager.get_user_excel_online(user_id)
+            
+            print(f"現在のスプレッドシート情報:")
+            print(f"  Google Sheets - ID: {current_spreadsheet_id}, シート名: {current_sheet_name}")
+            print(f"  Excel Online - URL: {current_excel_url}, ファイルID: {current_excel_file_id}, シート名: {current_excel_sheet_name}")
+            
+            # 商品追加機能と同じように、シンプルにシート選択画面を表示
+            print("シート選択画面を表示")
+            flex_message = FlexMessage(
+                alt_text="シート選択",
+                contents=FlexContainer.from_dict(create_sheet_selection())
+            )
+            print("Flex Messageを作成完了")
+            send_flex_message(event.reply_token, flex_message)
+            print("Flex Messageを送信完了")
+            print("=== シート名変更機能終了 ===")
+            return
+        else:
+            print("ユーザー管理システム: 利用不可")
+            reply = "❌ システムエラー: ユーザー管理システムが利用できません。"
+            send_text_message(event.reply_token, reply)
+            return
 
     # スプレッドシート管理機能
     print(f"user_text: {user_text}")
@@ -1215,23 +1433,8 @@ def handle_message(event):
                 else:
                     reply = f"❌ 登録エラー: {message}"
             else:
-                reply = "❌ スプレッドシートURLが正しくありません。\n\n"
-                reply += "【Googleスプレッドシート】\n"
-                reply += "正しい形式：\n"
-                reply += "スプレッドシート登録:https://docs.google.com/spreadsheets/d/xxxxxxx\n\n"
-                reply += "【Microsoft Excel Online】\n"
-                reply += "正しい形式：\n"
-                reply += "スプレッドシート登録:https://your-tenant.sharepoint.com/path/to/spreadsheet.xlsx\n\n"
-                reply += "⚠️ 重要：\n"
-                reply += "• 新しいスプレッドシートを作成してください\n"
-                reply += "• スプレッドシートは共有設定で「編集者」に設定してください\n"
-                reply += "• シート名を指定しない場合は、デフォルトシート名が使用されます\n\n"
-                reply += "📋 手順：\n"
-                reply += "1. スプレッドシートを新規作成（Google SheetsまたはExcel Online）\n"
-                reply += "2. 共有設定で「編集者」に設定\n"
-                reply += "3. URLをコピーして以下の形式で送信：\n"
-                reply += "スプレッドシート登録:【URL】\n\n"
-                reply += "💡 シート名の変更は後から「スプレッドシート登録」メニューから可能です。"
+                reply = "❌ スプレッドシートが登録されていません。\n\n"
+                reply += "まずスプレッドシートを登録してください。"
         send_text_message(event.reply_token, reply)
         return
 
@@ -1446,6 +1649,9 @@ def handle_message(event):
             reply += "商品名:マット 当社  ← 当社用の列に書き込み"
     else:
         # データが解析できない場合のデフォルトメッセージ
+        print(f"=== デフォルトメッセージ処理開始 ===")
+        print(f"user_text: '{user_text}'")
+        print(f"data: {data}")
         reply = "見積書作成システムへようこそ！\n\n"
         reply += "以下のコマンドが利用できます：\n\n"
         reply += "📝 商品を追加\n"
@@ -1455,6 +1661,7 @@ def handle_message(event):
         reply += "📈 利用状況確認\n"
         reply += "💳 プランアップグレード\n\n"
         reply += "詳細は「メニュー」ボタンからご確認ください。"
+        print("=== デフォルトメッセージ処理終了 ===")
     
     send_text_message(event.reply_token, reply)
 
@@ -1500,7 +1707,8 @@ def handle_postback(event):
         reply += "商品名:オリジナルTシャツ\n"
         reply += "サイズ:L\n"
         reply += "単価:2000\n"
-        reply += "数量:5"
+        reply += "数量:5\n"
+        reply += "サイクル:週2"
         send_text_message(event.reply_token, reply)
         
     elif action == 'select_product':
@@ -1519,12 +1727,14 @@ def handle_postback(event):
         reply += f"商品名:{product}\n"
         reply += "サイズ:○○\n"
         reply += "単価:○○○○\n"
-        reply += "数量:○○\n\n"
+        reply += "数量:○○\n"
+        reply += "サイクル:○○\n\n"
         reply += f"例：\n"
         reply += f"商品名:{product}\n"
         reply += "サイズ:L\n"
         reply += "単価:1800\n"
-        reply += "数量:3"
+        reply += "数量:3\n"
+        reply += "サイクル:週2"
         send_text_message(event.reply_token, reply)
         
     elif action == 'select_quantity':
@@ -1633,99 +1843,67 @@ def handle_postback(event):
             current_excel_url, current_excel_file_id, current_excel_sheet_name = user_manager.get_user_excel_online(user_id)
             user_state = get_user_state(user_id)
 
-            if user_state == 'spreadsheet_register':
-                # スプレッドシート登録からの場合はシート変更のみ
-                if current_excel_url and current_excel_file_id:
-                    # Microsoft Excel Onlineが登録されている場合
-                    if current_excel_sheet_name != sheet_name:
-                        success, message = user_manager.set_user_excel_online(user_id, current_excel_url, current_excel_file_id, sheet_name)
-                        if not success:
-                            reply = f"❌ シート変更エラー: {message}\n\n"
-                            reply += "スプレッドシートの登録からやり直してください。"
-                            send_text_message(event.reply_token, reply)
-                            return
+            # シート変更処理（user_stateに関係なく実行）
+            if current_excel_url and current_excel_file_id:
+                # Microsoft Excel Onlineが登録されている場合
+                if current_excel_sheet_name != sheet_name:
+                    success, message = user_manager.set_user_excel_online(user_id, current_excel_url, current_excel_file_id, sheet_name)
+                    if not success:
+                        reply = f"❌ シート変更エラー: {message}\n\n"
+                        reply += "スプレッドシートの登録からやり直してください。"
+                        send_text_message(event.reply_token, reply)
+                        return
+                
+                # ユーザーの状態に応じてメッセージを変更
+                if user_state == 'sheet_name_change':
+                    reply = f"✅ シート名を変更しました！\n\n"
+                    reply += f"📊 Excel Online URL:\n"
+                    reply += f"{current_excel_url}\n\n"
+                    reply += f"📋 変更前シート: {current_excel_sheet_name}\n"
+                    reply += f"📋 変更後シート: {sheet_name}\n\n"
+                    reply += "これで商品データが選択したシートに反映されます。"
+                    # ユーザーの状態をリセット
+                    set_user_state(user_id, '')
+                else:
                     reply = f"✅ Microsoft Excel Onlineのシートを変更しました！\n\n"
                     reply += f"📊 Excel Online URL:\n"
                     reply += f"{current_excel_url}\n\n"
                     reply += f"📋 変更前シート: {current_excel_sheet_name}\n"
                     reply += f"📋 変更後シート: {sheet_name}\n\n"
                     reply += "これで商品データが選択したシートに反映されます。"
-                elif current_spreadsheet_id:
-                    # Googleスプレッドシートが登録されている場合
-                    if current_sheet_name != sheet_name:
-                        success, message = user_manager.set_user_spreadsheet(user_id, current_spreadsheet_id, sheet_name)
-                        if not success:
-                            reply = f"❌ シート変更エラー: {message}\n\n"
-                            reply += "スプレッドシートの登録からやり直してください。"
-                            send_text_message(event.reply_token, reply)
-                            return
+            elif current_spreadsheet_id:
+                # Googleスプレッドシートが登録されている場合
+                if current_sheet_name != sheet_name:
+                    success, message = user_manager.set_user_spreadsheet(user_id, current_spreadsheet_id, sheet_name)
+                    if not success:
+                        reply = f"❌ シート変更エラー: {message}\n\n"
+                        reply += "スプレッドシートの登録からやり直してください。"
+                        send_text_message(event.reply_token, reply)
+                        return
+                
+                # ユーザーの状態に応じてメッセージを変更
+                if user_state == 'sheet_name_change':
+                    reply = f"✅ シート名を変更しました！\n\n"
+                    reply += f"📊 スプレッドシートURL:\n"
+                    reply += f"https://docs.google.com/spreadsheets/d/{current_spreadsheet_id}\n\n"
+                    reply += f"📋 変更前シート: {current_sheet_name}\n"
+                    reply += f"📋 変更後シート: {sheet_name}\n\n"
+                    reply += "これで商品データが選択したシートに反映されます。"
+                    # ユーザーの状態をリセット
+                    set_user_state(user_id, '')
+                else:
                     reply = f"✅ Googleスプレッドシートのシートを変更しました！\n\n"
                     reply += f"📊 スプレッドシートURL:\n"
                     reply += f"https://docs.google.com/spreadsheets/d/{current_spreadsheet_id}\n\n"
                     reply += f"📋 変更前シート: {current_sheet_name}\n"
                     reply += f"📋 変更後シート: {sheet_name}\n\n"
                     reply += "これで商品データが選択したシートに反映されます。"
-                else:
-                    reply = "❌ スプレッドシートが登録されていません。\n\n"
-                    reply += "まずスプレッドシートを登録してください。"
-                send_text_message(event.reply_token, reply)
-                return
-            elif user_state == 'product_add':
-                # 商品追加からの場合は入力フォーマットのみ表示
-                reply = f"📝 入力フォーマット（{sheet_name}）:\n"
-                if sheet_name == "比較見積書 ロング":
-                    reply += "商品名:○○○○\n"
-                    reply += "単価:○○○○\n"
-                    reply += "数量:○○\n"
-                    reply += "サイクル:○○\n"
-                    reply += "【語尾指定】\n"
-                    reply += "商品名:マット 現状  ← 現状用の列に書き込み\n"
-                    reply += "商品名:マット 当社  ← 当社用の列に書き込み\n"
-                    reply += "例：\n"
-                    reply += "商品名:マット 現状\n"
-                    reply += "単価:2000\n"
-                    reply += "数量:3\n"
-                    reply += "サイクル:週2"
-                elif sheet_name == "比較御見積書　ショート":
-                    reply += "商品名:○○○○\n"
-                    reply += "単価:○○○○\n"
-                    reply += "数量:○○\n"
-                    reply += "サイクル:○○\n"
-                    reply += "【語尾指定】\n"
-                    reply += "商品名:マット 現状  ← 現状用の列に書き込み\n"
-                    reply += "商品名:マット 当社  ← 当社用の列に書き込み\n"
-                    reply += "例：\n"
-                    reply += "商品名:マット 現状\n"
-                    reply += "単価:2000\n"
-                    reply += "数量:3\n"
-                    reply += "サイクル:週2"
-                elif sheet_name == "新規見積書　ショート":
-                    reply += "商品名:○○○○\n"
-                    reply += "単価:○○○○\n"
-                    reply += "数量:○○\n\n"
-                    reply += "例：\n"
-                    reply += "商品名:マット\n"
-                    reply += "単価:2000\n"
-                    reply += "数量:3"
-                else:
-                    reply += "商品名:○○○○\n"
-                    reply += "設置場所:○○\n"
-                    reply += "サイクル:○○\n"
-                    reply += "数量:○○\n"
-                    reply += "単価:○○○○\n\n"
-                    reply += "例：\n"
-                    reply += "商品名:マット\n"
-                    reply += "設置場所:玄関\n"
-                    reply += "サイクル:週2\n"
-                    reply += "数量:3\n"
-                    reply += "単価:2000"
-                send_text_message(event.reply_token, reply)
-                return
-        else:
-            reply = "❌ システムエラー: ユーザー管理システムが利用できません。"
+            else:
+                reply = "❌ スプレッドシートが登録されていません。\n\n"
+                reply += "まずスプレッドシートを登録してください。"
             send_text_message(event.reply_token, reply)
             return
-    
+
     elif action == 'select_plan':
         # プラン選択時の処理
         plan_type = params.get('plan', '')
@@ -1933,19 +2111,25 @@ def reset_spreadsheet_data(user_id):
         
         if user_id and user_manager and excel_online_manager:
             excel_url, excel_file_id, excel_sheet_name = user_manager.get_user_excel_online(user_id)
+            print(f"Excel Online設定確認: url={excel_url}, file_id={excel_file_id}, sheet_name={excel_sheet_name}")
             if excel_url and excel_file_id:
                 excel_online_enabled = True
                 print(f"Excel Online設定を検出: {excel_url}")
+                print(f"シート名: {excel_sheet_name}")
         
         # Excel Onlineが有効な場合はExcel Onlineをリセット
         if excel_online_enabled:
+            print(f"Excel Onlineリセット処理を実行します")
             return reset_excel_online_data(excel_file_id, excel_sheet_name, user_id)
         
         # 従来のGoogle Sheets処理
+        print(f"Google Sheetsリセット処理を実行します")
         return reset_google_sheets_data(user_id)
         
     except Exception as e:
         print(f"リセット処理エラー: {e}")
+        import traceback
+        traceback.print_exc()
         return False, f"リセット処理エラー: {e}"
 
 def reset_excel_online_data(file_id, sheet_name, user_id=None):
@@ -1958,29 +2142,70 @@ def reset_excel_online_data(file_id, sheet_name, user_id=None):
             return False, "Excel Onlineシステムが利用できません"
         
         # シート名に応じてリセット範囲を決定
+        clear_ranges = []
+        
         if sheet_name == "比較見積書 ロング":
-            # 商品名、単価、数量、サイクルをクリア（A19:D36）
-            clear_range = 'A19:D36'
+            print(f"比較見積書 ロングのリセット処理を実行します")
+            # 現状: 商品名（A19:B36）、単価（C19:C36）、数量（D19:D36）、サイクル（G19:G36）
+            # 当社: 商品名（I19:J36）、単価（K19:K36）、数量（L19:L36）、サイクル（O19:O36）
+            clear_ranges = [
+                'A19:B36',  # 現状 商品名
+                'C19:C36',  # 現状 単価
+                'D19:D36',  # 現状 数量
+                'G19:G36',  # 現状 サイクル
+                'I19:J36',  # 当社 商品名
+                'K19:K36',  # 当社 単価
+                'L19:L36',  # 当社 数量
+                'O19:O36'   # 当社 サイクル
+            ]
         elif sheet_name == "比較御見積書　ショート":
-            # 商品、単価、数量、サイクルをクリア（A19:D36）
-            clear_range = 'A19:D36'
+            print(f"比較御見積書　ショートのリセット処理を実行します")
+            # 現状: 商品名（A19:B28）、単価（C19:C28）、数量（D19:D28）、サイクル（G19:G28）
+            # 当社: 商品名（I19:J28）、単価（K19:K28）、数量（L19:L28）、サイクル（O19:O28）
+            clear_ranges = [
+                'A19:B28',  # 現状 商品名
+                'C19:C28',  # 現状 単価
+                'D19:D28',  # 現状 数量
+                'G19:G28',  # 現状 サイクル
+                'I19:J28',  # 当社 商品名
+                'K19:K28',  # 当社 単価
+                'L19:L28',  # 当社 数量
+                'O19:O28'   # 当社 サイクル
+            ]
         elif sheet_name == "新規見積書　ショート":
-            # 商品、サイクル、数量、単価をクリア（A19:D36）
-            clear_range = 'A19:D36'
+            print(f"新規見積書　ショートのリセット処理を実行します")
+            # 新規見積書　ショート専用の安全なリセット関数を使用（B23:D23を保護）
+            print(f"新規見積書　ショートのリセット処理を開始します")
+            print(f"使用する関数: clear_new_estimate_short_only")
+            success, error = excel_online_manager.clear_new_estimate_short_only(file_id, sheet_name)
+            if not success:
+                print(f"新規見積書　ショートのリセットに失敗: {error}")
+                return False, f"新規見積書　ショートのリセットに失敗: {error}"
+            print("新規見積書　ショートのリセットが完了しました（B23:D23は保護されました）")
+            return True, "新規見積書　ショートの商品データをリセットしました（B23:D23は保護されました）"
         elif sheet_name == "新規見積書　ロング":
-            # 商品、設置場所、サイクル、数量、単価をクリア（A19:E36）
-            clear_range = 'A19:E36'
+            print(f"新規見積書　ロングのリセット処理を実行します")
+            # 商品名（B27:C48）、設置場所（D27:D48）、サイクル（E27:E48）、数量（F27:F48）、単価（G27:G48）
+            clear_ranges = [
+                'B27:C48',  # 商品名
+                'D27:D48',  # 設置場所
+                'E27:E48',  # サイクル
+                'F27:F48',  # 数量
+                'G27:G48'   # 単価
+            ]
         else:
-            # その他のシート（A19:G36）
-            clear_range = 'A19:G36'
+            print(f"その他のシートのリセット処理を実行します: {sheet_name}")
+            # その他のシート（デフォルト範囲）
+            clear_ranges = ['A19:G36']
         
-        # 商品データの範囲をクリア
-        success, error = excel_online_manager.clear_range(file_id, sheet_name, clear_range)
-        if not success:
-            return False, f"商品データのクリアに失敗: {error}"
+        # 各範囲を個別にクリア（より確実な方法）
+        for clear_range in clear_ranges:
+            success, error = excel_online_manager.clear_range(file_id, sheet_name, clear_range)
+            if not success:
+                return False, f"範囲 {clear_range} のクリアに失敗: {error}"
+            print(f"範囲 {clear_range} をクリアしました")
         
-        print(f"範囲 {clear_range} をクリアしました")
-        return True, "Excel Onlineの商品データをリセットしました"
+        return True, f"Excel Onlineの商品データをリセットしました（{len(clear_ranges)}個の範囲）"
         
     except Exception as e:
         print(f"Excel Onlineリセットエラー: {e}")
@@ -1990,10 +2215,12 @@ def reset_google_sheets_data(user_id=None):
     """Google Sheetsの商品データをリセット"""
     try:
         print(f"開始: Google Sheetsリセット処理")
+        print(f"user_id: {user_id}")
         
         # 顧客のスプレッドシートIDを取得
         if user_id and user_manager:
             spreadsheet_id, sheet_name = user_manager.get_user_spreadsheet(user_id)
+            print(f"ユーザー管理システムから取得: spreadsheet_id={spreadsheet_id}, sheet_name={sheet_name}")
             if not spreadsheet_id:
                 # ユーザーがスプレッドシートを登録していない場合は共有スプレッドシートを使用
                 spreadsheet_id = SHARED_SPREADSHEET_ID
@@ -2002,6 +2229,12 @@ def reset_google_sheets_data(user_id=None):
         else:
             spreadsheet_id = SHARED_SPREADSHEET_ID
             sheet_name = DEFAULT_SHEET_NAME
+            print(f"デフォルト値を使用: spreadsheet_id={spreadsheet_id}, sheet_name={sheet_name}")
+        
+        # テスト用: 強制的に新規見積書　ショートに設定（コメントアウト）
+        # sheet_name = "新規見積書　ショート"
+        print(f"実際のシート名: {sheet_name}")
+        print(f"実際のスプレッドシートID: {spreadsheet_id}")
         
         # Google Sheetsクライアントを設定
         client = setup_google_sheets()
@@ -2009,51 +2242,711 @@ def reset_google_sheets_data(user_id=None):
             return False, "Google Sheetsクライアントの設定に失敗しました"
         
         # スプレッドシートを開く
+        print(f"スプレッドシートを開こうとしています: {spreadsheet_id}")
         spreadsheet = client.open_by_key(spreadsheet_id)
+        print(f"スプレッドシートを開きました: {spreadsheet.title}")
+        
+        # 利用可能なシート名を確認
+        available_sheets = [ws.title for ws in spreadsheet.worksheets()]
+        print(f"利用可能なシート: {available_sheets}")
+        
+        # 指定されたシート名が存在するか確認
+        if sheet_name not in available_sheets:
+            print(f"エラー: シート '{sheet_name}' が見つかりません")
+            return False, f"シート '{sheet_name}' が見つかりません。利用可能なシート: {', '.join(available_sheets)}"
+        
         worksheet = spreadsheet.worksheet(sheet_name)
+        print(f"ワークシートを開きました: {worksheet.title}")
         
         # シート名に応じてリセット範囲を決定
-        if sheet_name == "比較見積書 ロング":
-            # 商品名、単価、数量、サイクルをクリア（A19:D36）
-            clear_range = 'A19:D36'
+        clear_ranges = []
+        
+        if sheet_name == "比較見積書 ロング" or sheet_name == "比較見積書　ロング":
+            # 現状: 商品名（A19:B36）、単価（C19:C36）、数量（D19:D36）、サイクル（G19:G36）
+            # 当社: 商品名（I19:J36）、単価（K19:K36）、数量（L19:L36）、サイクル（O19:O36）
+            clear_ranges = [
+                'A19:B36',  # 現状 商品名
+                'C19:C36',  # 現状 単価
+                'D19:D36',  # 現状 数量
+                'G19:G36',  # 現状 サイクル
+                'I19:J36',  # 当社 商品名
+                'K19:K36',  # 当社 単価
+                'L19:L36',  # 当社 数量
+                'O19:O36'   # 当社 サイクル
+            ]
         elif sheet_name == "比較御見積書　ショート":
-            # 商品、単価、数量、サイクルをクリア（A19:D36）
-            clear_range = 'A19:D36'
+            # 現状: 商品名（A19:B28）、単価（C19:C28）、数量（D19:D28）、サイクル（G19:G28）
+            # 当社: 商品名（I19:J28）、単価（K19:K28）、数量（L19:L28）、サイクル（O19:O28）
+            clear_ranges = [
+                'A19:B28',  # 現状 商品名
+                'C19:C28',  # 現状 単価
+                'D19:D28',  # 現状 数量
+                'G19:G28',  # 現状 サイクル
+                'I19:J28',  # 当社 商品名
+                'K19:K28',  # 当社 単価
+                'L19:L28',  # 当社 数量
+                'O19:O28'   # 当社 サイクル
+            ]
         elif sheet_name == "新規見積書　ショート":
-            # 商品、サイクル、数量、単価をクリア（A19:D36）
-            clear_range = 'A19:D36'
+            # 商品名（B24:D30）、サイクル（E24:E30）、数量（F24:F30）、単価（G24:G30）
+            print(f"新規見積書　ショートのリセット処理開始")
+            clear_ranges = [
+                'B24:D30',  # 商品名
+                'E24:E30',  # サイクル
+                'F24:F30',  # 数量
+                'G24:G30'   # 単価
+            ]
+            print(f"設定されたリセット範囲: {clear_ranges}")
         elif sheet_name == "新規見積書　ロング":
-            # 商品、設置場所、サイクル、数量、単価をクリア（A19:E36）
-            clear_range = 'A19:E36'
+            # 商品名（B27:C48）、設置場所（D27:D48）、サイクル（E27:E48）、数量（F27:F48）、単価（G27:G48）
+            clear_ranges = [
+                'B27:C48',  # 商品名
+                'D27:D48',  # 設置場所
+                'E27:E48',  # サイクル
+                'F27:F48',  # 数量
+                'G27:G48'   # 単価
+            ]
         else:
-            # その他のシート（A19:G36）
-            clear_range = 'A19:G36'
+            # その他のシート（デフォルト範囲）
+            clear_ranges = ['A19:G36']
         
-        # 範囲をクリア
-        worksheet.batch_clear([clear_range])
-        print(f"範囲 {clear_range} をクリアしました")
+        # 各範囲をクリア
+        print(f"クリア処理開始: {len(clear_ranges)}個の範囲")
         
-        return True, "Google Sheetsの商品データをリセットしました"
+        # 個別にクリアする方法を試す
+        for i, range_name in enumerate(clear_ranges):
+            print(f"クリア中 {i+1}/{len(clear_ranges)}: {range_name}")
+            worksheet.batch_clear([range_name])
+            print(f"クリア完了: {range_name}")
+        
+        # 元の方法（コメントアウト）
+        # worksheet.batch_clear(clear_ranges)
+        
+        print(f"クリア処理完了: {len(clear_ranges)}個の範囲をクリアしました: {clear_ranges}")
+        
+        return True, f"Google Sheetsの商品データをリセットしました（{len(clear_ranges)}個の範囲）"
         
     except Exception as e:
         print(f"Google Sheetsリセットエラー: {e}")
         return False, f"Google Sheetsリセットエラー: {e}"
 
+@app.route("/test-reset", methods=['GET'])
+def test_reset():
+    """新規見積書　ショートのリセット処理をテストするエンドポイント"""
+    try:
+        print("=== テストリセット処理開始 ===")
+        success, message = reset_google_sheets_data()
+        print(f"=== テストリセット処理結果: {success}, {message} ===")
+        return f"テストリセット結果: {success}, {message}"
+    except Exception as e:
+        print(f"=== テストリセットエラー: {e} ===")
+        return f"テストリセットエラー: {e}"
+
+@app.route("/test-sheet-change", methods=['GET'])
+def test_sheet_change():
+    """シート名変更機能のテスト用エンドポイント"""
+    try:
+        # テスト用のユーザーID
+        test_user_id = "test_user_123"
+        
+        # ユーザー管理システムが利用可能かチェック
+        if not user_manager:
+            return "❌ ユーザー管理システムが利用できません。", 500
+        
+        # テスト用のスプレッドシート情報を設定
+        test_spreadsheet_id = "1GkJ8OYwIIMnYqxcwVBNArvk2byFL3UlGHgkyTiV6QU0"
+        test_sheet_name = "比較見積書 ロング"
+        
+        # テストユーザーを登録
+        user_info = user_manager.get_user_info(test_user_id)
+        if not user_info:
+            user_manager.register_user(test_user_id, "Test User")
+        
+        # テスト用のスプレッドシートを設定
+        success, message = user_manager.set_user_spreadsheet(test_user_id, test_spreadsheet_id, test_sheet_name)
+        
+        if not success:
+            return f"❌ テスト用スプレッドシート設定エラー: {message}", 500
+        
+        # シート選択画面のFlex Messageを作成
+        flex_message_data = create_sheet_selection()
+        
+        return {
+            "status": "success",
+            "message": "シート名変更機能のテスト用データを設定しました",
+            "test_user_id": test_user_id,
+            "current_spreadsheet_id": test_spreadsheet_id,
+            "current_sheet_name": test_sheet_name,
+            "flex_message_data": flex_message_data
+        }
+        
+    except Exception as e:
+        return f"❌ テストエラー: {str(e)}", 500
+
+@app.route("/test-sheet-change-direct", methods=['GET'])
+def test_sheet_change_direct():
+    """シート名変更機能を直接テストするエンドポイント"""
+    try:
+        # テスト用のユーザーID
+        test_user_id = "test_user_123"
+        
+        # ユーザー管理システムが利用可能かチェック
+        if not user_manager:
+            return "❌ ユーザー管理システムが利用できません。", 500
+        
+        # テスト用のスプレッドシート情報を設定
+        test_spreadsheet_id = "1GkJ8OYwIIMnYqxcwVBNArvk2byFL3UlGHgkyTiV6QU0"
+        test_sheet_name = "比較見積書 ロング"
+        
+        # テストユーザーを登録
+        user_info = user_manager.get_user_info(test_user_id)
+        if not user_info:
+            user_manager.register_user(test_user_id, "Test User")
+        
+        # テスト用のスプレッドシートを設定
+        success, message = user_manager.set_user_spreadsheet(test_user_id, test_spreadsheet_id, test_sheet_name)
+        
+        if not success:
+            return f"❌ テスト用スプレッドシート設定エラー: {message}", 500
+        
+        # シート名変更機能を直接実行
+        print(f"=== シート名変更機能開始 ===")
+        print(f"user_id: {test_user_id}")
+        
+        if user_manager:
+            print("ユーザー管理システム: 利用可能")
+            # ユーザーの状態をシート名変更に設定
+            set_user_state(test_user_id, 'sheet_name_change')
+            print(f"ユーザー状態を設定: sheet_name_change")
+            
+            # 現在のスプレッドシート情報を取得
+            current_spreadsheet_id, current_sheet_name = user_manager.get_user_spreadsheet(test_user_id)
+            current_excel_url, current_excel_file_id, current_excel_sheet_name = user_manager.get_user_excel_online(test_user_id)
+            
+            print(f"現在のスプレッドシート情報:")
+            print(f"  Google Sheets - ID: {current_spreadsheet_id}, シート名: {current_sheet_name}")
+            print(f"  Excel Online - URL: {current_excel_url}, ファイルID: {current_excel_file_id}, シート名: {current_excel_sheet_name}")
+            
+            if current_excel_url and current_excel_file_id:
+                print("Excel Onlineが登録されています")
+                reply = f"📊 現在のシート名: {current_excel_sheet_name}\n\n"
+                reply += "シート名を変更するには、以下のシートから選択してください："
+            elif current_spreadsheet_id:
+                print("Googleスプレッドシートが登録されています")
+                reply = f"📊 現在のシート名: {current_sheet_name}\n\n"
+                reply += "シート名を変更するには、以下のシートから選択してください："
+            else:
+                print("スプレッドシートが登録されていません")
+                # 共有スプレッドシートを使用してシート名変更を許可
+                print("共有スプレッドシートを使用してシート名変更を許可")
+                reply = f"📊 現在のシート名: {DEFAULT_SHEET_NAME}\n\n"
+                reply += "共有スプレッドシートのシート名を変更するには、以下のシートから選択してください：\n\n"
+                reply += "💡 独自のスプレッドシートを登録すると、より便利にご利用いただけます。"
+        else:
+            print("ユーザー管理システム: 利用不可")
+            reply = "❌ システムエラー: ユーザー管理システムが利用できません。"
+        
+        # シート選択画面のFlex Messageを作成
+        flex_message_data = create_sheet_selection()
+        
+        return {
+            "status": "success",
+            "message": "シート名変更機能のテストを実行しました",
+            "test_user_id": test_user_id,
+            "current_spreadsheet_id": current_spreadsheet_id,
+            "current_sheet_name": current_sheet_name,
+            "reply_message": reply,
+            "flex_message_data": flex_message_data
+        }
+        
+    except Exception as e:
+        return f"❌ テストエラー: {str(e)}", 500
+
+@app.route("/test-line-message", methods=['POST'])
+def test_line_message():
+    """LINE Botのメッセージ処理を直接テストするエンドポイント"""
+    try:
+        # テスト用のメッセージイベントを作成
+        test_event = {
+            "type": "message",
+            "message": {
+                "type": "text",
+                "text": "シート名変更"
+            },
+            "replyToken": "test_reply_token",
+            "source": {
+                "type": "user",
+                "userId": "test_user_123"
+            }
+        }
+        
+        # イベントを処理
+        from linebot.models import MessageEvent, TextMessage
+        from linebot.models.events import Source
+        
+        # イベントオブジェクトを作成
+        event = MessageEvent(
+            message=TextMessage(text="シート名変更"),
+            reply_token="test_reply_token",
+            source=Source(type="user", user_id="test_user_123")
+        )
+        
+        # handle_message関数を直接呼び出し
+        handle_message(event)
+        
+        return {
+            "status": "success",
+            "message": "LINE Botのメッセージ処理テストを実行しました",
+            "test_message": "シート名変更"
+        }
+        
+    except Exception as e:
+        return f"❌ テストエラー: {str(e)}", 500
+
+@app.route("/test-sheet-change-condition", methods=['GET'])
+def test_sheet_change_condition():
+    """シート名変更機能の条件分岐を直接テストするエンドポイント"""
+    try:
+        # テスト用の変数を設定
+        user_text = "シート名変更"
+        user_id = "test_user_123"
+        
+        print(f"=== シート名変更条件分岐テスト開始 ===")
+        print(f"user_text: '{user_text}'")
+        print(f"user_id: {user_id}")
+        
+        # 条件分岐をテスト
+        if user_text in ["商品を追加"]:
+            print("商品を追加の条件に一致")
+        elif user_text in ["スプレッドシート登録"]:
+            print("スプレッドシート登録の条件に一致")
+        elif user_text in ["会社情報を更新"]:
+            print("会社情報を更新の条件に一致")
+        elif user_text in ["利用状況確認"]:
+            print("利用状況確認の条件に一致")
+        elif user_text in ["プランアップグレード"]:
+            print("プランアップグレードの条件に一致")
+        elif user_text in ["見積書を確認"]:
+            print("見積書を確認の条件に一致")
+        elif user_text in ["リセット"]:
+            print("リセットの条件に一致")
+        elif user_text in ["シート名変更"]:
+            print("シート名変更の条件に一致 ✅")
+            
+            if user_manager:
+                print("ユーザー管理システム: 利用可能")
+                # ユーザーの状態をシート名変更に設定
+                set_user_state(user_id, 'sheet_name_change')
+                print(f"ユーザー状態を設定: sheet_name_change")
+                
+                # 現在のスプレッドシート情報を取得
+                current_spreadsheet_id, current_sheet_name = user_manager.get_user_spreadsheet(user_id)
+                current_excel_url, current_excel_file_id, current_excel_sheet_name = user_manager.get_user_excel_online(user_id)
+                
+                print(f"現在のスプレッドシート情報:")
+                print(f"  Google Sheets - ID: {current_spreadsheet_id}, シート名: {current_sheet_name}")
+                print(f"  Excel Online - URL: {current_excel_url}, ファイルID: {current_excel_file_id}, シート名: {current_excel_sheet_name}")
+                
+                # 商品追加機能と同じように、シンプルにシート選択画面を表示
+                print("シート選択画面を表示")
+                flex_message_data = create_sheet_selection()
+                print("Flex Messageを作成完了")
+                print("=== シート名変更条件分岐テスト終了 ===")
+                
+                return {
+                    "status": "success",
+                    "message": "シート名変更機能の条件分岐テストが成功しました",
+                    "user_text": user_text,
+                    "user_id": user_id,
+                    "flex_message_data": flex_message_data
+                }
+            else:
+                print("ユーザー管理システム: 利用不可")
+                return {
+                    "status": "error",
+                    "message": "ユーザー管理システムが利用できません",
+                    "user_text": user_text,
+                    "user_id": user_id
+                }
+        else:
+            print("どの条件にも一致しません")
+        
+        return {
+            "status": "error",
+            "message": "シート名変更の条件に一致しませんでした",
+            "user_text": user_text,
+            "user_id": user_id
+        }
+        
+    except Exception as e:
+        return f"❌ テストエラー: {str(e)}", 500
+
+@app.route("/test-webhook", methods=['POST'])
+def test_webhook():
+    """LINE BotのWebhookエンドポイントを直接テストするエンドポイント"""
+    try:
+        # テスト用のWebhookイベントを作成
+        test_webhook_data = {
+            "events": [
+                {
+                    "type": "message",
+                    "message": {
+                        "type": "text",
+                        "text": "シート名変更"
+                    },
+                    "replyToken": "test_reply_token",
+                    "source": {
+                        "type": "user",
+                        "userId": "test_user_123"
+                    }
+                }
+            ]
+        }
+        
+        # Webhookイベントを処理
+        print(f"=== Webhookテスト開始 ===")
+        print(f"テストデータ: {test_webhook_data}")
+        
+        # callback関数を直接呼び出し
+        from flask import request
+        import json
+        
+        # リクエストデータを設定
+        request._cached_data = json.dumps(test_webhook_data).encode('utf-8')
+        request._cached_json = test_webhook_data
+        
+        # callback関数を呼び出し
+        result = callback()
+        
+        return {
+            "status": "success",
+            "message": "Webhookテストを実行しました",
+            "result": str(result)
+        }
+        
+    except Exception as e:
+        return f"❌ テストエラー: {str(e)}", 500
+
+@app.route("/test-rich-menu", methods=['GET'])
+def test_rich_menu():
+    """リッチメニュー作成のテスト用エンドポイント"""
+    try:
+        # 設定を確認
+        print(f"LINE_CHANNEL_ACCESS_TOKEN: {LINE_CHANNEL_ACCESS_TOKEN[:20]}...")
+        print(f"LINE_CHANNEL_SECRET: {LINE_CHANNEL_SECRET[:20]}...")
+        
+        # 設定オブジェクトを確認
+        print(f"Configuration access_token: {configuration.access_token[:20]}...")
+        
+        with ApiClient(configuration) as api_client:
+            messaging_api = MessagingApi(api_client)
+            
+            # 既存のリッチメニューを取得
+            rich_menus = messaging_api.get_rich_menu_list()
+            print(f"Existing rich menus: {len(rich_menus.richmenus)}")
+            
+            # 簡単なリッチメニューを作成
+            simple_rich_menu = {
+                "size": {"width": 800, "height": 270},
+                "selected": False,
+                "name": "テストメニュー",
+                "chatBarText": "テスト",
+                "areas": [
+                    {
+                        "bounds": {"x": 0, "y": 0, "width": 400, "height": 270},
+                        "action": {"type": "message", "label": "テスト", "text": "テスト"}
+                    },
+                    {
+                        "bounds": {"x": 400, "y": 0, "width": 400, "height": 270},
+                        "action": {"type": "message", "label": "テスト2", "text": "テスト2"}
+                    }
+                ]
+            }
+            
+            rich_menu_id = messaging_api.create_rich_menu(simple_rich_menu).rich_menu_id
+            print(f"Simple rich menu created: {rich_menu_id}")
+            
+            # デフォルトに設定
+            messaging_api.set_default_rich_menu(rich_menu_id)
+            print("Rich menu set as default")
+            
+            return f"Test rich menu created successfully! ID: {rich_menu_id}"
+            
+    except Exception as e:
+        error_info = f"Test Error: {str(e)}\nError type: {type(e)}"
+        if hasattr(e, 'response'):
+            error_info += f"\nResponse status: {e.response.status_code}\nResponse body: {e.response.text}"
+        print(error_info)
+        return error_info
+
+@app.route("/test-simple-rich-menu", methods=['GET'])
+def test_simple_rich_menu():
+    """シンプルなリッチメニュー作成のテスト"""
+    try:
+        with ApiClient(configuration) as api_client:
+            messaging_api = MessagingApi(api_client)
+            
+            # 最もシンプルなリッチメニュー
+            simple_menu = {
+                "size": {"width": 2500, "height": 843},
+                "selected": False,
+                "name": "シンプルメニュー",
+                "chatBarText": "メニュー",
+                "areas": [
+                    {
+                        "bounds": {"x": 0, "y": 0, "width": 1250, "height": 843},
+                        "action": {"type": "message", "text": "こんにちは"}
+                    }
+                ]
+            }
+            
+            rich_menu_id = messaging_api.create_rich_menu(simple_menu).rich_menu_id
+            messaging_api.set_default_rich_menu(rich_menu_id)
+            
+            return f"Simple rich menu created successfully! ID: {rich_menu_id}"
+            
+    except Exception as e:
+        error_info = f"Simple Test Error: {str(e)}\nError type: {type(e)}"
+        if hasattr(e, 'response'):
+            error_info += f"\nResponse status: {e.response.status_code}\nResponse body: {e.response.text}"
+        print(error_info)
+        return error_info
+
+@app.route("/test-correct-rich-menu", methods=['GET'])
+def test_correct_rich_menu():
+    """正しい形式のリッチメニュー作成テスト"""
+    try:
+        with ApiClient(configuration) as api_client:
+            messaging_api = MessagingApi(api_client)
+            
+            # LINE Botの仕様に従った正しい形式
+            correct_menu = {
+                "size": {"width": 2500, "height": 843},
+                "selected": False,
+                "name": "正しいメニュー",
+                "chatBarText": "メニュー",
+                "areas": [
+                    {
+                        "bounds": {"x": 0, "y": 0, "width": 1250, "height": 843},
+                        "action": {
+                            "type": "message",
+                            "text": "こんにちは"
+                        }
+                    }
+                ]
+            }
+            
+            print(f"Creating rich menu with data: {correct_menu}")
+            rich_menu_id = messaging_api.create_rich_menu(correct_menu).rich_menu_id
+            messaging_api.set_default_rich_menu(rich_menu_id)
+            
+            return f"Correct rich menu created successfully! ID: {rich_menu_id}"
+            
+    except Exception as e:
+        error_info = f"Correct Test Error: {str(e)}\nError type: {type(e)}"
+        if hasattr(e, 'response'):
+            error_info += f"\nResponse status: {e.response.status_code}\nResponse body: {e.response.text}"
+        print(error_info)
+        return error_info
+
+@app.route("/test-v3-rich-menu", methods=['GET'])
+def test_v3_rich_menu():
+    """LINE Bot SDK v3の正しい形式でリッチメニュー作成テスト"""
+    try:
+        with ApiClient(configuration) as api_client:
+            messaging_api = MessagingApi(api_client)
+            
+            # LINE Bot SDK v3の正しい形式
+            v3_menu = {
+                "size": {"width": 2500, "height": 843},
+                "selected": False,
+                "name": "v3メニュー",
+                "chatBarText": "メニュー",
+                "areas": [
+                    {
+                        "bounds": {"x": 0, "y": 0, "width": 1250, "height": 843},
+                        "action": {
+                            "type": "message",
+                            "text": "こんにちは"
+                        }
+                    }
+                ]
+            }
+            
+            print(f"Creating v3 rich menu with data: {v3_menu}")
+            
+            rich_menu_id = messaging_api.create_rich_menu(v3_menu).rich_menu_id
+            messaging_api.set_default_rich_menu(rich_menu_id)
+            
+            return f"v3 rich menu created successfully! ID: {rich_menu_id}"
+            
+    except Exception as e:
+        error_info = f"v3 Test Error: {str(e)}\nError type: {type(e)}"
+        if hasattr(e, 'response'):
+            error_info += f"\nResponse status: {e.response.status_code}\nResponse body: {e.response.text}"
+        print(error_info)
+        return error_info
+
+@app.route("/test-official-rich-menu", methods=['GET'])
+def test_official_rich_menu():
+    """LINE Bot公式ドキュメントに従ったリッチメニュー作成テスト"""
+    try:
+        with ApiClient(configuration) as api_client:
+            messaging_api = MessagingApi(api_client)
+            
+            # LINE Bot公式ドキュメントに従った形式
+            official_menu = {
+                "size": {"width": 2500, "height": 843},
+                "selected": False,
+                "name": "公式メニュー",
+                "chatBarText": "メニュー",
+                "areas": [
+                    {
+                        "bounds": {"x": 0, "y": 0, "width": 1250, "height": 843},
+                        "action": {
+                            "type": "message",
+                            "text": "こんにちは"
+                        }
+                    }
+                ]
+            }
+            
+            print(f"Creating official rich menu with data: {official_menu}")
+            
+            # リッチメニューを作成
+            response = messaging_api.create_rich_menu(official_menu)
+            rich_menu_id = response.rich_menu_id
+            print(f"Rich menu created with ID: {rich_menu_id}")
+            
+            # デフォルトに設定
+            messaging_api.set_default_rich_menu(rich_menu_id)
+            print("Rich menu set as default")
+            
+            return f"Official rich menu created successfully! ID: {rich_menu_id}"
+            
+    except Exception as e:
+        error_info = f"Official Test Error: {str(e)}\nError type: {type(e)}"
+        if hasattr(e, 'response'):
+            error_info += f"\nResponse status: {e.response.status_code}\nResponse body: {e.response.text}"
+        print(error_info)
+        return error_info
+
+@app.route("/create-simple-rich-menu", methods=['GET'])
+def create_simple_rich_menu_endpoint():
+    """シンプルなリッチメニューを作成するエンドポイント"""
+    try:
+        rich_menu_id = create_simple_rich_menu()
+        if rich_menu_id:
+            return jsonify({
+                "success": True,
+                "message": "シンプルなリッチメニューが正常に作成されました",
+                "rich_menu_id": rich_menu_id
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "message": "シンプルなリッチメニューの作成に失敗しました"
+            }), 500
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": f"エラーが発生しました: {str(e)}"
+        }), 500
+
+@app.route("/create-minimal-rich-menu", methods=['GET'])
+def create_minimal_rich_menu_endpoint():
+    """最小限のリッチメニューを作成するエンドポイント"""
+    try:
+        rich_menu_id = create_minimal_rich_menu()
+        if rich_menu_id:
+            return jsonify({
+                "success": True,
+                "message": "最小限のリッチメニューが正常に作成されました",
+                "rich_menu_id": rich_menu_id
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "message": "最小限のリッチメニューの作成に失敗しました"
+            }), 500
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": f"エラーが発生しました: {str(e)}"
+        }), 500
+
+@app.route("/create-rich-menu-with-classes", methods=['GET'])
+def create_rich_menu_with_classes_endpoint():
+    """正しいクラスを使用してリッチメニューを作成するエンドポイント"""
+    try:
+        rich_menu_id = create_rich_menu_with_classes()
+        if rich_menu_id:
+            return jsonify({
+                "success": True,
+                "message": "正しいクラスを使用したリッチメニューが正常に作成されました",
+                "rich_menu_id": rich_menu_id
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "message": "正しいクラスを使用したリッチメニューの作成に失敗しました"
+            }), 500
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": f"エラーが発生しました: {str(e)}"
+        }), 500
+
+@app.route("/test-user-info", methods=['GET'])
+def test_user_info():
+    """テスト用のユーザー情報確認エンドポイント"""
+    try:
+        print("=== テストユーザー情報確認開始 ===")
+        
+        # テスト用ユーザーID
+        test_user_id = "U851bfbf13230815475afee42feffe71a"
+        
+        if user_manager:
+            spreadsheet_id, sheet_name = user_manager.get_user_spreadsheet(test_user_id)
+            excel_url, excel_file_id, excel_sheet_name = user_manager.get_user_excel_online(test_user_id)
+            
+            result = {
+                "user_id": test_user_id,
+                "google_sheets": {
+                    "spreadsheet_id": spreadsheet_id,
+                    "sheet_name": sheet_name
+                },
+                "excel_online": {
+                    "url": excel_url,
+                    "file_id": excel_file_id,
+                    "sheet_name": excel_sheet_name
+                }
+            }
+            
+            print(f"=== テストユーザー情報確認結果: {result} ===")
+            return result
+        else:
+            return {"error": "ユーザー管理システムが利用できません"}
+            
+    except Exception as e:
+        print(f"=== テストユーザー情報確認エラー: {e} ===")
+        return {"error": str(e)}
+
 if __name__ == "__main__":
     logger.info("=== アプリケーション起動開始 ===")
     logger.info("環境変数の確認:")
     logger.info(f"MS_CLIENT_ID: {os.environ.get('MS_CLIENT_ID', 'NOT_SET')}")
-    logger.info(f"MS_CLIENT_SECRET: {os.environ.get('MS_CLIENT_SECRET', 'NOT_SET')[:10]}..." if os.environ.get('MS_CLIENT_SECRET') else 'NOT_SET')
-    logger.info(f"MS_TENANT_ID: {os.environ.get('MS_TENANT_ID', 'NOT_SET')}")
-    logger.info(f"LINE_CHANNEL_ACCESS_TOKEN: {os.environ.get('LINE_CHANNEL_ACCESS_TOKEN', 'NOT_SET')[:10]}..." if os.environ.get('LINE_CHANNEL_ACCESS_TOKEN') else 'NOT_SET')
-    logger.info(f"LINE_CHANNEL_SECRET: {os.environ.get('LINE_CHANNEL_SECRET', 'NOT_SET')[:10]}..." if os.environ.get('LINE_CHANNEL_SECRET') else 'NOT_SET')
-    logger.info(f"SHARED_SPREADSHEET_ID: {os.environ.get('SHARED_SPREADSHEET_ID', 'NOT_SET')}")
-    logger.info(f"DEFAULT_SHEET_NAME: {os.environ.get('DEFAULT_SHEET_NAME', 'NOT_SET')}")
-    logger.info(f"STRIPE_SECRET_KEY: {os.environ.get('STRIPE_SECRET_KEY', 'NOT_SET')[:10]}..." if os.environ.get('STRIPE_SECRET_KEY') else 'NOT_SET')
-    logger.info(f"STRIPE_WEBHOOK_SECRET: {os.environ.get('STRIPE_WEBHOOK_SECRET', 'NOT_SET')[:10]}..." if os.environ.get('STRIPE_WEBHOOK_SECRET') else 'NOT_SET')
-    logger.info(f"GOOGLE_SHEETS_CREDENTIALS: {'SET' if os.environ.get('GOOGLE_SHEETS_CREDENTIALS') else 'NOT_SET'}")
-    logger.info("=== アプリケーション起動完了 ===")
     
-    port = int(os.environ.get('PORT', 5002))
-    debug_mode = os.environ.get('FLASK_ENV') == 'development'
-    app.run(host='0.0.0.0', port=port, debug=debug_mode)
+    # リッチメニューを作成（一時的にコメントアウト）
+    # try:
+    #     logger.info("リッチメニューを作成中...")
+    #     rich_menu_id = create_rich_menu()
+    #     if rich_menu_id:
+    #         logger.info(f"リッチメニューが正常に作成されました: {rich_menu_id}")
+    #     else:
+    #         logger.warning("リッチメニューの作成に失敗しました")
+    # except Exception as e:
+    #     logger.error(f"リッチメニュー作成エラー: {e}")
+    
+    # アプリケーションを起動
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5003)), debug=True)
